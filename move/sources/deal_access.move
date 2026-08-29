@@ -23,15 +23,27 @@ module escrow::deal_access {
     // VERIFY: exact `use` paths (object::UID, tx_context::TxContext,
     // sui::table::Table or similar) before implementing.
 
+    // MINIMAL COMPILE FIX ONLY (Person 1 — see commit message).
+    // A struct with `key` must declare `id: UID` as its first field, so with
+    // every field commented out this module could not build, which blocked the
+    // whole package including Person 1's modules. Only the field declarations
+    // were uncommented. No logic was added, nothing was renamed, and every TODO
+    // and design note below is untouched and still Person 3's call.
+    //
+    // `deal_id` and `addresses` currently warn as unused fields. That warning is
+    // left in place deliberately rather than silenced with #[allow(unused_field)]
+    // — it is an accurate signal that check_policy/seal_approve are still to be
+    // written, and suppressing it inside another owner's file would hide that.
+
     /// PROPOSED — an allowlist scoped to one Deal, holding exactly the two
     /// negotiating agents' addresses. Confirm with Person 1 whether this
     /// should be a field on Deal itself vs. a separate shared object
     /// referenced by Deal (separate object avoids growing the hot Deal
     /// object on every access-control change).
     public struct DealAllowlist has key {
-        // id: UID,
-        // deal_id: ID,
-        // addresses: vector<address>,   // exactly client_agent + specialist_agent owners
+        id: UID,
+        deal_id: ID,
+        addresses: vector<address>,   // exactly client_agent + specialist_agent owners
     }
 
     // TODO: public fun new_for_deal(deal_id: ID, client_owner: address,
