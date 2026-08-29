@@ -5,6 +5,7 @@
 // those are built — do not invent their shape yet, coordinate with
 // Person 2.
 import { createRoot } from "react-dom/client";
+import "./index.css";
 import { App } from "./app/App";
 
 const container = document.getElementById("root");
