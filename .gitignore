@@ -10,6 +10,9 @@ dist-ssr/
 # Vite
 frontend/.vite/
 
+# TypeScript
+*.tsbuildinfo
+
 # Move
 move/build/
 

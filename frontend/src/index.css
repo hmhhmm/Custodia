@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens for the Envoy UI (Warrant's front end).
+ * Dark mode is the default and only theme for this hackathon build — see
+ * /docs/ARCHITECTURE.md and the Person 4 design direction: near-black
+ * (not pure #000) backgrounds, desaturated accent colors, glass cards
+ * used deliberately for the live status feed.
+ */
+@theme {
+  --color-warrant-bg: #0f1419;
+  --color-warrant-surface: #161c24;
+  --color-warrant-border: #262f3a;
+  --color-warrant-accent: #5eb3a3; /* desaturated teal, ~12% below a naive bright #22c1a8 */
+  --color-warrant-accent-dim: #3d766c;
+  --color-warrant-text: #e6ebf0;
+  --color-warrant-text-dim: #8b98a5;
+  --color-warrant-danger: #c9645a; /* desaturated red */
+  --color-warrant-success: #6bb894; /* desaturated green */
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: radial-gradient(
+    circle at 20% 0%,
+    color-mix(in srgb, var(--color-warrant-accent) 8%, transparent),
+    transparent 45%
+  ), var(--color-warrant-bg);
+  color: var(--color-warrant-text);
+}
+
+/*
+ * Glass card utility for the live status feed. Deliberately restrained
+ * blur (per design direction: heavy blur hurts legibility on a projector
+ * or screen-share during judging).
+ */
+.glass-card {
+  background: color-mix(in srgb, var(--color-warrant-surface) 70%, transparent);
+  border: 1px solid var(--color-warrant-border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
