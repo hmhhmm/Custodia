@@ -157,4 +157,15 @@ project, not a follow-up SDK task.
 
 Do not guess any of the above in frontend or verification code — leave a
 `// VERIFY` / `// TBD` comment and coordinate directly with Person 1
+
+**Known finding — confirm with Person 2 before building wallet-connect
+UI:** `@mysten/dapp-kit` (the package originally assumed for wallet
+connection) is now fully deprecated per Mysten's own migration guide
+(https://sdk.mystenlabs.com/sui/migrations/sui-2.0/dapp-kit). The current
+replacement is `@mysten/dapp-kit-react` + `@mysten/dapp-kit-core`
+(confirmed on npm, versions pinned in `frontend/package.json`), which
+uses gRPC instead of JSON-RPC and Web Components (Lit Elements) for UI
+instead of React-specific components — this changes how
+`frontend/src/sui/WalletConnect.tsx` needs to be built. See that file's
+header comment for detail.
 instead.
