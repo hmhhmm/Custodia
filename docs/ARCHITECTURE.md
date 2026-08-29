@@ -75,7 +75,7 @@ Person 1 before other people's code depends on it.
 | specialist_agent | ID | |
 | escrowed_amount | Balance\<SUI\> | |
 | status | enum: Negotiating, Escrowed, Delivered, Verified, Released, Disputed | |
-| proof_ref | Option\<ID\> | Points at a Walrus/Nautilus-backed verification record |
+| proof_ref | Option\<ID\> | Points at a Walrus/Nautilus-backed verification record. PROPOSED concrete shape in `frontend/src/verification/proof.ts` — confirm with Person 1 |
 
 ## End-to-end sequence
 
@@ -111,14 +111,32 @@ Person 1 before other people's code depends on it.
 | zkLogin | Step 1 — user auth, no seed phrase required |
 | Enoki (sponsored transactions) | Steps 6 & 9 — users transact without holding SUI for gas |
 | Programmable Transaction Blocks | Steps 6 & 9 — the two composite on-chain operations (escrow+deal creation; verify+release+reputation update) |
-| Seal | Step 4 — encrypting private negotiation/deliverable content |
-| Nautilus | Step 8 — attesting that delivered work matches what was promised (HIGHEST RISK — mocked fallback required per /CLAUDE.md rule 6) |
-| Walrus | Step 8 — storing deliverable artifacts / proof material off-chain |
+| Seal | Step 4 — encrypting private negotiation/deliverable content. REAL, via `@mysten/seal` and an allowlist `seal_approve` policy (`move/sources/deal_access.move`, `frontend/src/verification/seal.ts`) — package name confirmed, encrypt/decrypt flow written but UNTESTED against a live key server |
+| Nautilus | Step 8 — attesting that delivered work matches what was promised. HIGHEST RISK; per /CLAUDE.md rule 6 the demo uses a clearly-labeled MOCKED attestation (`frontend/src/verification/nautilus.mock.ts`) as the primary deliverable, not a last-resort fallback — see "Verification Layer Implementation Notes" below |
+| Walrus | Step 8 — storing deliverable artifacts / proof material off-chain. REAL, via the public testnet HTTP API (`frontend/src/verification/walrus.ts`) |
 | SuiNS | Step 3 (and AgentIdentity.suins_name generally) — human-readable agent identities for discovery |
 
 Out of scope for the working demo (roadmap only): Onchain Randomness,
 DeepBook, Kiosk, full confidential balances. Do not implement these even
 if a task seems to invite it.
+
+## Verification Layer Implementation Notes
+
+Status of Person 3's scope as of this writing:
+
+| Piece | Status | Notes |
+|---|---|---|
+| Walrus | **Real** | HTTP API via public testnet publisher/aggregator, confirmed against the installed `accessing-data` Sui skill (docs.wal.app returned 403 to direct fetches this session — the skill's `walrus.md` was the working verification source). Endpoints are community-run and may change; re-verify against docs.wal.app before mainnet. |
+| Seal | **Real, untested end-to-end** | `@mysten/seal` package name confirmed via docs.sui.io. Encrypt/decrypt call shapes and the `seal_approve` Move convention are documented and implemented per-spec, but have not been exercised against a live Seal key server or a deployed `warrant::deal_access` module. The allowlist policy is modeled on Mysten's own whitelist reference pattern, scoped down to exactly the two agents in a Deal. |
+| Nautilus | **Mocked — by design, not as a fallback** | Real Nautilus requires deploying an actual AWS Nitro Enclave (or Marlin Oyster), registering PCR measurements on-chain, and verifying AWS certificate chains in Move — genuine infrastructure work, not an SDK call, and Mysten's own template is explicitly unaudited/incomplete. `frontend/src/verification/nautilus.mock.ts` returns a structurally drop-in attestation shape (`{ attestationId, taskId, resultHash, timestamp, verified, mocked: true }`) so a real implementation can replace it later without changing `Deal.proof_ref`'s format. Every consumer (UI, logs) must surface the `mocked` flag — never let a simulated attestation appear indistinguishable from a real one in the demo. |
+| `Deal.proof_ref` format | **PROPOSED, not yet confirmed with Person 1** | See `frontend/src/verification/proof.ts` for the proposed shape (an on-chain pointer object holding a Walrus blob ID, an attestation ID, and an `attestation_mocked` bool) and the rejected alternative. `Deal.proof_ref` is still an unimplemented `Option<ID>` stub in `move/sources/deal.move` — this proposal has to be confirmed once Person 1 builds it out. |
+
+What a real Nautilus integration would require post-hackathon: an AWS
+account with Nitro Enclave support (or a Marlin Oyster deployment), a
+reproducible Docker build of the enclave's server code, PCR measurement
+registration via a Move contract, and a Move-side verifier for the AWS
+attestation certificate chain. Budget this as a multi-day infrastructure
+project, not a follow-up SDK task.
 
 ## Team ownership boundaries
 
