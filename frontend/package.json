@@ -11,12 +11,12 @@
   },
   "_comment_deps": "VERIFY: add @mysten/sui, @mysten/dapp-kit, @mysten/enoki, @mysten/seal, @mysten/walrus — exact package names may differ, confirm each against the current Mysten SDK docs / npm registry before installing; do not guess version numbers.",
   "dependencies": {
-    "react": "_VERIFY_CURRENT_VERSION_",
-    "react-dom": "_VERIFY_CURRENT_VERSION_"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "typescript": "_VERIFY_CURRENT_VERSION_",
-    "vite": "_VERIFY_CURRENT_VERSION_",
-    "@vitejs/plugin-react": "_VERIFY_CURRENT_VERSION_"
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "@vitejs/plugin-react": "^6.1.1"
   }
 }
