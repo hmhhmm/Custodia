@@ -1,0 +1,22 @@
+{
+  "name": "@warrant/frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint ."
+  },
+  "_comment_deps": "VERIFY: add @mysten/sui, @mysten/dapp-kit, @mysten/enoki, @mysten/seal, @mysten/walrus — exact package names may differ, confirm each against the current Mysten SDK docs / npm registry before installing; do not guess version numbers.",
+  "dependencies": {
+    "react": "_VERIFY_CURRENT_VERSION_",
+    "react-dom": "_VERIFY_CURRENT_VERSION_"
+  },
+  "devDependencies": {
+    "typescript": "_VERIFY_CURRENT_VERSION_",
+    "vite": "_VERIFY_CURRENT_VERSION_",
+    "@vitejs/plugin-react": "_VERIFY_CURRENT_VERSION_"
+  }
+}

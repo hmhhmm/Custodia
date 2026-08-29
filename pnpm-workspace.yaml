@@ -1,0 +1,5 @@
+packages:
+  - "frontend"
+  # Person 3: if a standalone Node service ends up being the cleaner option
+  # for Walrus/Seal/Nautilus calls instead of frontend/src/verification,
+  # add it here, e.g. "services/verification".

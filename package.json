@@ -1,0 +1,16 @@
+{
+  "name": "warrant",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Warrant — on-chain trust and settlement layer for AI agents on Sui.",
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "pnpm --filter frontend dev",
+    "build": "pnpm --filter frontend build",
+    "move:build": "cd move && sui move build",
+    "move:test": "cd move && sui move test"
+  },
+  "packageManager": "pnpm@_VERIFY_CURRENT_VERSION_"
+}
