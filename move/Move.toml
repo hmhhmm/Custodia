@@ -1,0 +1,13 @@
+[package]
+name = "warrant"
+edition = "2024.beta"  # VERIFY: confirm current Move edition string against Sui docs before building
+
+[dependencies]
+# VERIFY: Sui framework dependency block — confirm current recommended form
+# (git dependency vs. local `Sui = { local = "../sui-framework" }`) and the
+# correct rev/tag to pin against in the official Sui Move docs before
+# running `sui move build`.
+# Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
+
+[addresses]
+warrant = "0x0"
