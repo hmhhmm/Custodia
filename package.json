@@ -7,10 +7,9 @@
     "frontend"
   ],
   "scripts": {
-    "dev": "pnpm --filter frontend dev",
-    "build": "pnpm --filter frontend build",
+    "dev": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace frontend",
     "move:build": "cd move && sui move build",
     "move:test": "cd move && sui move test"
-  },
-  "packageManager": "pnpm@_VERIFY_CURRENT_VERSION_"
+  }
 }

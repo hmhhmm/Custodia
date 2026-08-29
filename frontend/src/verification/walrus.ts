@@ -93,6 +93,7 @@ export async function readBlob(
 // than running them in the browser (e.g. to keep publisher credentials
 // server-side — not currently needed since testnet publishers are
 // unauthenticated), propose moving this to a new /services/verification
-// package and update pnpm-workspace.yaml + /docs/ARCHITECTURE.md
+// package and update the root package.json workspaces field +
+// /docs/ARCHITECTURE.md
 // accordingly — flag this decision to the team rather than doing it
 // silently.

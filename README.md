@@ -19,9 +19,8 @@ Built for MUBA Hacks 2026 (Sui Track, AI x Sui).
 - **Sui CLI** — confirm current version against the official Sui install
   docs before installing (`sui --version` once installed).
 - **Node.js** — confirm current LTS version against nodejs.org before
-  installing.
-- **pnpm** — confirm current version; this repo uses a pnpm workspace
-  (see `pnpm-workspace.yaml`).
+  installing. Comes with npm, which this repo's workspace setup uses
+  (see root `package.json`'s `workspaces` field).
 - **A Sui wallet** capable of testnet use (or rely on zkLogin — see
   `frontend/src/sui/zkLogin.ts`, still a stub). Confirm current
   recommended wallet setup in the Sui docs.
@@ -56,16 +55,16 @@ building.
 
 ### Frontend (`/frontend/`)
 
-From the repo root (pnpm workspace):
+From the repo root (npm workspace):
 
 ```
-pnpm install
-pnpm dev          # runs frontend/ via `vite`
+npm install
+npm run dev          # runs frontend/ via `vite`
 ```
 
 ## Local dev loop
 
-1. `pnpm dev` starts the Vite dev server for the frontend.
+1. `npm run dev` starts the Vite dev server for the frontend.
 2. Run a local or testnet Sui environment as needed for the transaction
    layer (Person 2) — VERIFY current `sui client` / localnet setup
    instructions in the Sui docs.
