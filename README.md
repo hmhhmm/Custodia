@@ -92,15 +92,18 @@ fill in the "TBD — fill in once Person 1 deploys to testnet" section of
 
 Create a `.env` (gitignored) in `frontend/` with (names below are
 placeholders — verify each exact env var name in the relevant official
-docs before use):
+docs before use). This is a Vite app, so any env var read by client code
+via `import.meta.env` MUST be prefixed `VITE_` or Vite will not expose it
+to the browser bundle — `process.env` does not exist in the browser and
+must not be used in `frontend/src/`:
 
 ```
-SUI_NETWORK=testnet                # VERIFY: exact expected values
-ENOKI_API_KEY=                     # VERIFY: exact env var name in Enoki docs
-WALRUS_PUBLISHER_URL=              # VERIFY: exact env var name / current publisher URL in Walrus docs
-WALRUS_AGGREGATOR_URL=             # VERIFY: exact env var name / current aggregator URL in Walrus docs
-SEAL_KEY_SERVER_URL=               # VERIFY: exact env var name in Seal docs
-NAUTILUS_ENDPOINT=                 # VERIFY: exact env var name in Nautilus docs
+VITE_SUI_NETWORK=testnet                # VERIFY: exact expected values
+VITE_ENOKI_API_KEY=                     # VERIFY: exact env var name in Enoki docs
+VITE_WALRUS_PUBLISHER_URL=              # VERIFY: exact env var name / current publisher URL in Walrus docs
+VITE_WALRUS_AGGREGATOR_URL=             # VERIFY: exact env var name / current aggregator URL in Walrus docs
+VITE_SEAL_KEY_SERVER_URL=               # VERIFY: exact env var name in Seal docs
+VITE_NAUTILUS_ENDPOINT=                 # VERIFY: exact env var name in Nautilus docs (only relevant once/if real Nautilus is attempted — see docs/ARCHITECTURE.md)
 ```
 
 ## Team & task ownership
