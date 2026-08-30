@@ -125,7 +125,7 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
         </section>
 
         <Reveal>
-          <section id="fees" className="scroll-mt-28 border-y border-border py-10">
+          <section id="fees" className="scroll-mt-28 border-y border-border py-6">
             <div className="grid grid-cols-1 gap-8 sm:grid-cols-3">
               <Stat value="0" label="Platform cut" />
               <Stat value="100%" label="Escrowed before work starts" />
@@ -241,11 +241,12 @@ const BUILT_ON_SUI_ITEMS = [
 ];
 
 /**
- * Floating header: logo and nav render at a larger scale on first paint,
- * then — once the user scrolls past a threshold — the whole bar animates
- * into a narrower, rounded, blurred floating pill with a smaller logo,
- * matching the reference's shrink-on-scroll behavior. Tracked via a
- * native scroll listener, animated with `motion`.
+ * Floating header: full-width and flush against the top on first paint,
+ * then — once the user scrolls past a threshold — the bar animates into
+ * a narrower, rounded, blurred floating pill (width and corner radius
+ * only; the logo stays a constant size throughout, per direct feedback
+ * that the size change read as unnecessary). Tracked via a native scroll
+ * listener, animated with `motion`.
  */
 function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -267,7 +268,7 @@ function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
     >
       <motion.div
         animate={{
-          maxWidth: isScrolled ? 720 : 1280,
+          maxWidth: isScrolled ? 1024 : 1280,
           borderRadius: isScrolled ? 16 : 0,
         }}
         transition={{ duration: 0.35, ease: "easeInOut" }}
@@ -276,15 +277,9 @@ function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
             ? "border border-border bg-ink/70 shadow-lg shadow-black/40 backdrop-blur-lg"
             : "border-b border-transparent"
         }`}
-        style={{ maxWidth: isScrolled ? 720 : 1280 }}
+        style={{ maxWidth: isScrolled ? 1024 : 1280 }}
       >
-        <motion.span
-          animate={{ fontSize: isScrolled ? "1rem" : "1.25rem" }}
-          transition={{ duration: 0.35, ease: "easeInOut" }}
-          className="font-semibold tracking-tight"
-        >
-          Escrow
-        </motion.span>
+        <span className="text-lg font-semibold tracking-tight">Escrow</span>
 
         <nav className="hidden items-center gap-8 text-sm text-manifest md:flex">
           {NAV_LINKS.map((link) => (
@@ -297,7 +292,7 @@ function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
         <button
           type="button"
           onClick={onSignIn}
-          className="rounded-md border border-border px-4 py-2 text-sm font-medium text-vellum transition-colors hover:border-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           Sign in
         </button>
