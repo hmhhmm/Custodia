@@ -1,11 +1,11 @@
 // Owner: Person 1 (Move/contracts).
 //
 // AgentIdentity represents an on-chain identity for an AI agent
-// participating in Warrant. See /docs/ARCHITECTURE.md for the full object
+// participating in Escrow. See /docs/ARCHITECTURE.md for the full object
 // model and how this ties into Reputation.
 //
 // STATUS: stub only — no working logic yet. Do not deploy.
-module warrant::agent_identity {
+module escrow::agent_identity {
     // VERIFY: exact `use` paths for Sui framework types (object::UID,
     // tx_context::TxContext, etc.) against the current Sui Move stdlib
     // before implementing.

@@ -7,7 +7,7 @@
 // fits into.
 //
 // TBD — fill in exact Move function names/argument order once Person 1
-// deploys warrant::deal and warrant::mandate to testnet. Do not guess
+// deploys escrow::deal and escrow::mandate to testnet. Do not guess
 // them here.
 
 // TODO: export function buildLockEscrowAndCreateDealTx(params: {

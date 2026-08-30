@@ -5,7 +5,7 @@
 // updated as part of PTB #2 (verify-and-release-and-update-reputation).
 //
 // STATUS: stub only — no working logic yet. Do not deploy.
-module warrant::reputation {
+module escrow::reputation {
     // VERIFY: exact `use` paths for Sui framework types before implementing.
 
     /// PROPOSED fields — confirm with team before relying on exact names.

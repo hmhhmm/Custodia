@@ -1,5 +1,5 @@
 [package]
-name = "warrant"
+name = "escrow"
 edition = "2024.beta"  # VERIFY: confirm current Move edition string against Sui docs before building
 
 [dependencies]
@@ -10,4 +10,4 @@ edition = "2024.beta"  # VERIFY: confirm current Move edition string against Sui
 # Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
 
 [addresses]
-warrant = "0x0"
+escrow = "0x0"

@@ -1,14 +1,14 @@
-# Warrant — System Architecture
+# Escrow — System Architecture
 
 ## Summary
 
-Warrant is a neutral, on-chain trust and settlement layer built on Sui
+Escrow is a neutral, on-chain trust and settlement layer built on Sui
 that lets AI agents discover each other, negotiate privately, verify
 delivered work, and get paid automatically via escrow — without a
 centralized platform sitting in the middle of the transaction. Envoy is
 the companion user-facing personal agent: it talks to a human in plain
 language, translates their goal into a scoped mandate, and drives the
-Warrant flow on their behalf. This document is the shared source of truth
+Escrow flow on their behalf. This document is the shared source of truth
 for the object model, the end-to-end flow, and team ownership boundaries;
 read it before making any structural change, and update it (not just your
 own head) when a decision changes.
@@ -23,7 +23,7 @@ Envoy (off-chain orchestration)
   │  interprets goal, discovers/negotiates with specialist agents,
   │  drafts transactions on the user's behalf within their Mandate
   ▼
-Warrant (on-chain trust layer)
+Escrow (on-chain trust layer)
   │  identity, reputation, mandate enforcement, escrow lock/release
   ▼
 Sui Move objects
@@ -31,7 +31,7 @@ Sui Move objects
 ```
 
 Envoy never holds funds or bypasses a Mandate — every spend it initiates
-is checked against an on-chain Mandate object before Warrant will lock
+is checked against an on-chain Mandate object before Escrow will lock
 escrow.
 
 ## Core Move objects
@@ -127,7 +127,7 @@ Status of Person 3's scope as of this writing:
 | Piece | Status | Notes |
 |---|---|---|
 | Walrus | **Real** | HTTP API via public testnet publisher/aggregator, confirmed against the installed `accessing-data` Sui skill (docs.wal.app returned 403 to direct fetches this session — the skill's `walrus.md` was the working verification source). Endpoints are community-run and may change; re-verify against docs.wal.app before mainnet. |
-| Seal | **Real, untested end-to-end** | `@mysten/seal` package name confirmed via docs.sui.io. Encrypt/decrypt call shapes and the `seal_approve` Move convention are documented and implemented per-spec, but have not been exercised against a live Seal key server or a deployed `warrant::deal_access` module. The allowlist policy is modeled on Mysten's own whitelist reference pattern, scoped down to exactly the two agents in a Deal. |
+| Seal | **Real, untested end-to-end** | `@mysten/seal` package name confirmed via docs.sui.io. Encrypt/decrypt call shapes and the `seal_approve` Move convention are documented and implemented per-spec, but have not been exercised against a live Seal key server or a deployed `escrow::deal_access` module. The allowlist policy is modeled on Mysten's own whitelist reference pattern, scoped down to exactly the two agents in a Deal. |
 | Nautilus | **Mocked — by design, not as a fallback** | Real Nautilus requires deploying an actual AWS Nitro Enclave (or Marlin Oyster), registering PCR measurements on-chain, and verifying AWS certificate chains in Move — genuine infrastructure work, not an SDK call, and Mysten's own template is explicitly unaudited/incomplete. `frontend/src/verification/nautilus.mock.ts` returns a structurally drop-in attestation shape (`{ attestationId, taskId, resultHash, timestamp, verified, mocked: true }`) so a real implementation can replace it later without changing `Deal.proof_ref`'s format. Every consumer (UI, logs) must surface the `mocked` flag — never let a simulated attestation appear indistinguishable from a real one in the demo. |
 | `Deal.proof_ref` format | **PROPOSED, not yet confirmed with Person 1** | See `frontend/src/verification/proof.ts` for the proposed shape (an on-chain pointer object holding a Walrus blob ID, an attestation ID, and an `attestation_mocked` bool) and the rejected alternative. `Deal.proof_ref` is still an unimplemented `Option<ID>` stub in `move/sources/deal.move` — this proposal has to be confirmed once Person 1 builds it out. |
 
@@ -149,8 +149,8 @@ project, not a follow-up SDK task.
 
 **TBD — fill in once Person 1 deploys to testnet:**
 - Exact Move function names and argument order for
-  `warrant::deal::create_and_lock_escrow`, `warrant::deal::mark_delivered`,
-  `warrant::deal::verify_and_release`, `warrant::mandate::assert_within_mandate`.
+  `escrow::deal::create_and_lock_escrow`, `escrow::deal::mark_delivered`,
+  `escrow::deal::verify_and_release`, `escrow::mandate::assert_within_mandate`.
 - Package ID / object IDs for any shared objects (e.g. a registry, if one
   turns out to be needed for discovery — not yet decided).
 - Reputation scoring formula.

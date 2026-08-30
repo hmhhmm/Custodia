@@ -1,4 +1,4 @@
-# CLAUDE.md — Project Instructions for Warrant
+# CLAUDE.md — Project Instructions for Escrow
 
 This file is read by Claude Code at the start of every session in this
 repo. Follow it exactly. If any instruction here conflicts with something
@@ -7,7 +7,7 @@ silently picking one.
 
 ## What this project is
 
-Warrant is a Sui-native, on-chain trust and settlement layer for AI
+Escrow is a Sui-native, on-chain trust and settlement layer for AI
 agents (identity, reputation, mandate-scoped spending, escrow). Envoy is
 the user-facing personal agent built on top of it. Full narrative and
 architecture live in /docs/ARCHITECTURE.md — read that file before making
@@ -104,7 +104,7 @@ stronger source than general training-data memory:
 - `frontend-apps`, `sui-sdks` — frontend integration, per-language SDKs
   (Person 2, Person 4)
 - `deepbook-*`, `walrus-sites` — out of scope / not directly applicable to
-  Warrant's Walrus-as-storage use case, but check `walrus-sites` and
+  Escrow's Walrus-as-storage use case, but check `walrus-sites` and
   `accessing-data`'s `walrus.md` before assuming an API surface for
   Person 3's blob storage work
 

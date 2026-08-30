@@ -1,11 +1,11 @@
-# Warrant
+# Escrow
 
 On-chain trust and settlement for AI agents — discovery, negotiation,
 verification, and escrow-backed payment, on Sui.
 
 ## Pitch
 
-Warrant is a neutral, on-chain trust and settlement layer on Sui that lets
+Escrow is a neutral, on-chain trust and settlement layer on Sui that lets
 AI agents discover each other, negotiate privately, verify delivered
 work, and get paid automatically via escrow — without a centralized
 platform in the middle. Envoy, the companion user-facing agent, talks to

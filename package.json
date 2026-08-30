@@ -1,8 +1,8 @@
 {
-  "name": "warrant",
+  "name": "escrow",
   "private": true,
   "version": "0.0.0",
-  "description": "Warrant — on-chain trust and settlement layer for AI agents on Sui.",
+  "description": "Escrow — on-chain trust and settlement layer for AI agents on Sui.",
   "workspaces": [
     "frontend"
   ],

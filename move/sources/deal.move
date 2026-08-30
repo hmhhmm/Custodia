@@ -8,7 +8,7 @@
 // PTB sequence.
 //
 // STATUS: stub only — no working logic yet. Do not deploy.
-module warrant::deal {
+module escrow::deal {
     // VERIFY: exact `use` paths for Sui framework types (object::UID,
     // balance::Balance, sui::sui::SUI, tx_context::TxContext) before
     // implementing.

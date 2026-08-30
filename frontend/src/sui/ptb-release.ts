@@ -7,7 +7,7 @@
 // specialist agent, and updates both agents' Reputation objects.
 //
 // TBD — fill in exact Move function names/argument order once Person 1
-// deploys warrant::deal and warrant::reputation to testnet. Do not guess
+// deploys escrow::deal and escrow::reputation to testnet. Do not guess
 // them here.
 
 // TODO: export function buildVerifyAndReleaseTx(params: {

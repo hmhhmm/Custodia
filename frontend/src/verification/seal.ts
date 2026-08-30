@@ -1,7 +1,7 @@
 // Owner: Person 3 (verification/storage).
 // STATUS: real implementation, following the documented Seal flow — but
 // UNTESTED against a live Seal key server, and depends on
-// warrant::deal_access::seal_approve (see /move/sources/deal_access.move,
+// escrow::deal_access::seal_approve (see /move/sources/deal_access.move,
 // itself a stub) actually being deployed. Do not treat this as working
 // until both sides are built and exercised together.
 //
@@ -25,7 +25,7 @@
  * that only addresses on the Deal's on-chain allowlist can decrypt it.
  *
  * `dealId` is used to derive the Seal identity `id` — VERIFY the exact
- * identity/id-prefix convention against warrant::deal_access's
+ * identity/id-prefix convention against escrow::deal_access's
  * `check_policy` once that module is implemented; the two must agree
  * byte-for-byte or decryption will always fail the on-chain policy check.
  *
@@ -34,7 +34,7 @@
  *   const { encryptedObject, key: backupKey } = await client.encrypt({
  *     threshold: 2,       // PROPOSED t-of-n — confirm with team, 2 assumes
  *                          // at least 2 key servers configured
- *     packageId,          // warrant package ID once deployed — TBD, see
+ *     packageId,          // escrow package ID once deployed — TBD, see
  *                          // /docs/ARCHITECTURE.md
  *     id,                 // derived from dealId per the allowlist's ID
  *                          // prefix convention
@@ -55,7 +55,7 @@ export async function encryptNegotiationTerms(
 /**
  * Decrypts a Deal-scoped payload. Requires a SessionKey (signed by the
  * caller's wallet) and a built (not executed) transaction targeting
- * warrant::deal_access::seal_approve for the given dealId — the Seal key
+ * escrow::deal_access::seal_approve for the given dealId — the Seal key
  * servers dry-run this transaction to decide whether to release key
  * shares.
  *
@@ -79,6 +79,6 @@ export async function decryptNegotiationTerms(
   dealId: string,
 ): Promise<Uint8Array> {
   throw new Error(
-    "decryptNegotiationTerms: not implemented — VERIFY @mysten/seal API and warrant::deal_access::seal_approve argument order before implementing (see file header)",
+    "decryptNegotiationTerms: not implemented — VERIFY @mysten/seal API and escrow::deal_access::seal_approve argument order before implementing (see file header)",
   );
 }

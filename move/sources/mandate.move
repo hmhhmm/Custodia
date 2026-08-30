@@ -6,7 +6,7 @@
 // proceed. See /docs/ARCHITECTURE.md for the end-to-end sequence.
 //
 // STATUS: stub only — no working logic yet. Do not deploy.
-module warrant::mandate {
+module escrow::mandate {
     // VERIFY: exact `use` paths for Sui framework types before implementing.
 
     /// PROPOSED fields — confirm with team before relying on exact names.
