@@ -8,17 +8,23 @@
 // rather than pulling in a second animation library or a Next.js/shadcn
 // component tree that doesn't match this project's setup.
 //
-// Motion: a staggered blur-in hero entrance (headline word-by-word, then
-// subhead/CTA), an ambient radial glow behind the hero (pure CSS, no
-// image asset), and a sticky card-stack scroll effect for the info
-// sections below the fold — each section pins briefly while the next
-// slides over it. The escrow-lock/verification wax-seal moment inside
+// Layout: a single wide container (max-w-7xl) with consistent horizontal
+// padding, sections in a plain top-to-bottom flow, and every card grid
+// using items-stretch + h-full so cards in the same row match height
+// regardless of how much their copy wraps — the earlier pass's sticky
+// scroll-stack looked distinctive but produced inconsistent card heights
+// and a messy reading order, so it's been dropped in favor of a simpler,
+// more legible structure per direct feedback.
+//
+// Motion: a staggered blur-in hero entrance, an ambient radial glow
+// behind the hero (pure CSS, no image asset), and a shrink-on-scroll
+// floating header. The escrow-lock/verification wax-seal moment inside
 // the app (StatusFeed/Receipt) remains the one place with a heavier,
 // more ornamented animation; this page's motion stays quick and
 // restrained so it doesn't compete with that moment.
 
-import { useEffect, useRef, useState } from "react";
-import { motion, useScroll, useTransform } from "motion/react";
+import { useEffect, useState } from "react";
+import { motion } from "motion/react";
 
 const HEADLINE_WORDS = "This isn't a promise. It's proof.".split(" ");
 
@@ -32,16 +38,23 @@ const fadeUp = {
   visible: { opacity: 1, y: 0 },
 };
 
+const NAV_LINKS = [
+  { label: "Features", href: "#features" },
+  { label: "Solution", href: "#solution" },
+  { label: "Fees", href: "#fees" },
+  { label: "About", href: "#about" },
+];
+
 export function Landing({ onSignIn }: { onSignIn: () => void }) {
   return (
     <div className="min-h-screen bg-ink text-vellum">
       <FloatingHeader onSignIn={onSignIn} />
 
       {/* Spacer so hero content doesn't render under the fixed header. */}
-      <div className="h-[72px]" aria-hidden="true" />
+      <div className="h-24" aria-hidden="true" />
 
-      <main className="mx-auto max-w-6xl px-4 sm:px-6">
-        <section className="relative flex flex-col items-center overflow-hidden py-28 text-center">
+      <main className="mx-auto max-w-7xl px-6 sm:px-8 lg:px-12">
+        <section className="relative flex flex-col items-center overflow-hidden py-20 text-center sm:py-28">
           {/* Ambient glow — pure CSS radial gradient, no image asset. Kept
               subtle and static (no pulsing loop) so it reads as atmosphere,
               not another animated element competing for attention. */}
@@ -71,15 +84,12 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
             className="max-w-2xl text-5xl font-semibold tracking-tight sm:text-6xl"
           >
             {HEADLINE_WORDS.map((word, i) => (
-              <motion.span
-                key={`${word}-${i}`}
-                variants={wordVariants}
-                transition={{ duration: 0.5, ease: "easeOut" }}
-                className="inline-block"
-              >
-                {word}
+              <span key={`${word}-${i}`} className="inline-block">
+                <motion.span variants={wordVariants} transition={{ duration: 0.5, ease: "easeOut" }} className="inline-block">
+                  {word}
+                </motion.span>
                 {i < HEADLINE_WORDS.length - 1 ? " " : ""}
-              </motion.span>
+              </span>
             ))}
           </motion.h1>
 
@@ -114,13 +124,24 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
           </motion.div>
         </section>
 
-        <Reveal delay={0}>
-          <StatsStrip />
+        <Reveal>
+          <section id="fees" className="scroll-mt-28 border-y border-border py-10">
+            <div className="grid grid-cols-1 gap-8 sm:grid-cols-3">
+              <Stat value="0" label="Platform cut" />
+              <Stat value="100%" label="Escrowed before work starts" />
+              <Stat value="Sui" label="Settlement network" />
+            </div>
+          </section>
         </Reveal>
 
-        <Reveal delay={0.05}>
-          <section className="mb-24">
-            <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid-cols-3">
+        <Reveal>
+          <section id="features" className="scroll-mt-28 py-20">
+            <SectionHeading
+              eyebrow="Features"
+              title="Every step, visible"
+              body="Nothing about a deal happens off-screen. You see the agent found, the funds locked, and the proof checked, in that order."
+            />
+            <div className="mt-10 grid grid-cols-1 items-stretch gap-4 sm:grid-cols-3">
               <FeatureCard
                 title="Find who can do it"
                 body="Your agent searches on-chain agent identities by capability and reputation — no platform picking a winner for you."
@@ -137,9 +158,47 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
           </section>
         </Reveal>
 
-        <StackedSections />
+        <Reveal>
+          <section id="solution" className="scroll-mt-28 border-t border-border py-20">
+            <SectionHeading
+              eyebrow="Solution"
+              title="How it works"
+              body="Four steps, each one a real on-chain or off-chain event — not a marketing diagram."
+            />
+            <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+              {HOW_IT_WORKS_STEPS.map((step) => (
+                <div key={step.n} className="flex h-full flex-col rounded-lg border border-border p-5">
+                  <span className="font-data text-sm text-manifest">{step.n}</span>
+                  <p className="mt-3 font-medium text-vellum">{step.title}</p>
+                  <p className="mt-1 text-sm text-manifest">{step.body}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </Reveal>
 
-        <Reveal delay={0}>
+        <Reveal>
+          <section id="about" className="scroll-mt-28 border-t border-border py-20">
+            <SectionHeading
+              eyebrow="About"
+              title="Built on Sui"
+              body="Every piece maps to a real step in the flow — nothing here is bolted on for coverage."
+            />
+            <div className="mt-10 grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {BUILT_ON_SUI_ITEMS.map((item) => (
+                <div
+                  key={item.name}
+                  className="flex h-full flex-col rounded-lg border border-border p-5"
+                >
+                  <p className="font-medium text-vellum">{item.name}</p>
+                  <p className="mt-1 text-sm text-manifest">{item.role}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        </Reveal>
+
+        <Reveal>
           <ClosingCta onSignIn={onSignIn} />
         </Reveal>
       </main>
@@ -149,13 +208,44 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
   );
 }
 
+const HOW_IT_WORKS_STEPS = [
+  {
+    n: "01",
+    title: "Describe the task",
+    body: "Tell your agent what you need in plain language.",
+  },
+  {
+    n: "02",
+    title: "Funds lock in escrow",
+    body: "Payment is held under a spending mandate you control.",
+  },
+  {
+    n: "03",
+    title: "Work gets verified",
+    body: "Delivered work is checked against what was promised.",
+  },
+  {
+    n: "04",
+    title: "Payment releases",
+    body: "Funds release and both agents' reputations update on-chain.",
+  },
+];
+
+const BUILT_ON_SUI_ITEMS = [
+  { name: "zkLogin", role: "Sign in without a seed phrase" },
+  { name: "Programmable Transaction Blocks", role: "Escrow and release, each a single atomic step" },
+  { name: "Seal", role: "Encrypts private negotiation terms" },
+  { name: "Walrus", role: "Stores delivered-work artifacts off-chain" },
+  { name: "Nautilus", role: "Verifies delivered work matches what was promised" },
+  { name: "SuiNS", role: "Human-readable agent identities" },
+];
+
 /**
- * Floating header: full-width and flush against the top on first paint,
- * then — once the user scrolls past a threshold — animates into a
- * narrower, rounded, blurred floating bar. This is the nav "shrink to
- * pill" behavior from the reference: tracked via a scroll listener
- * (native, no scroll-library dependency) and animated with `motion`'s
- * layout-aware width/radius/blur transition.
+ * Floating header: logo and nav render at a larger scale on first paint,
+ * then — once the user scrolls past a threshold — the whole bar animates
+ * into a narrower, rounded, blurred floating pill with a smaller logo,
+ * matching the reference's shrink-on-scroll behavior. Tracked via a
+ * native scroll listener, animated with `motion`.
  */
 function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -177,20 +267,33 @@ function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
     >
       <motion.div
         animate={{
-          maxWidth: isScrolled ? 640 : 1152,
+          maxWidth: isScrolled ? 720 : 1280,
           borderRadius: isScrolled ? 16 : 0,
-          paddingLeft: isScrolled ? 20 : 0,
-          paddingRight: isScrolled ? 20 : 0,
         }}
         transition={{ duration: 0.35, ease: "easeInOut" }}
-        className={`flex w-full items-center justify-between px-4 py-3 sm:px-6 ${
+        className={`flex w-full items-center justify-between px-5 py-3 sm:px-8 ${
           isScrolled
             ? "border border-border bg-ink/70 shadow-lg shadow-black/40 backdrop-blur-lg"
             : "border-b border-transparent"
         }`}
-        style={{ maxWidth: isScrolled ? 640 : 1152 }}
+        style={{ maxWidth: isScrolled ? 720 : 1280 }}
       >
-        <span className="text-base font-semibold tracking-tight">Escrow</span>
+        <motion.span
+          animate={{ fontSize: isScrolled ? "1rem" : "1.25rem" }}
+          transition={{ duration: 0.35, ease: "easeInOut" }}
+          className="font-semibold tracking-tight"
+        >
+          Escrow
+        </motion.span>
+
+        <nav className="hidden items-center gap-8 text-sm text-manifest md:flex">
+          {NAV_LINKS.map((link) => (
+            <a key={link.href} href={link.href} className="transition-colors hover:text-vellum">
+              {link.label}
+            </a>
+          ))}
+        </nav>
+
         <button
           type="button"
           onClick={onSignIn}
@@ -220,8 +323,8 @@ function Footer({ onSignIn }: { onSignIn: () => void }) {
   ];
 
   return (
-    <footer className="border-t border-border px-6 py-16">
-      <div className="mx-auto grid max-w-6xl grid-cols-2 gap-12 sm:grid-cols-4">
+    <footer className="border-t border-border px-6 py-16 sm:px-8 lg:px-12">
+      <div className="mx-auto grid max-w-7xl grid-cols-2 gap-12 sm:grid-cols-4">
         <div className="col-span-2 sm:col-span-1">
           <span className="text-base font-semibold tracking-tight">Escrow</span>
           <p className="mt-3 max-w-xs text-sm text-manifest">
@@ -250,7 +353,7 @@ function Footer({ onSignIn }: { onSignIn: () => void }) {
         ))}
       </div>
 
-      <div className="mx-auto mt-12 flex max-w-6xl flex-col items-start justify-between gap-3 border-t border-border pt-6 text-xs text-manifest sm:flex-row sm:items-center">
+      <div className="mx-auto mt-12 flex max-w-7xl flex-col items-start justify-between gap-3 border-t border-border pt-6 text-xs text-manifest sm:flex-row sm:items-center">
         <span>© 2026 Escrow. Hackathon build on Sui testnet.</span>
         <span>
           Verification steps clearly labeled as simulated are not backed by real on-chain
@@ -264,173 +367,50 @@ function Footer({ onSignIn }: { onSignIn: () => void }) {
 /** Scroll-triggered reveal wrapper — fires once when the section enters
  * the viewport, not on every scroll pass, so revisiting the page by
  * scrolling up and down doesn't replay the animation repeatedly. */
-function Reveal({ children, delay = 0 }: { children: React.ReactNode; delay?: number }) {
+function Reveal({ children }: { children: React.ReactNode }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "-80px" }}
-      transition={{ duration: 0.5, ease: "easeOut", delay }}
+      transition={{ duration: 0.5, ease: "easeOut" }}
     >
       {children}
     </motion.div>
   );
 }
 
-function StatsStrip() {
-  const stats = [
-    { value: "0", label: "Platform cut" },
-    { value: "100%", label: "Escrowed before work starts" },
-    { value: "Sui", label: "Settlement network" },
-  ];
+function Stat({ value, label }: { value: string; label: string }) {
   return (
-    <section className="mb-24 grid grid-cols-1 gap-8 border-y border-border py-10 sm:grid-cols-3">
-      {stats.map((stat) => (
-        <div key={stat.label} className="text-center">
-          <p className="text-3xl font-semibold tracking-tight">{stat.value}</p>
-          <p className="mt-1 text-sm text-manifest">{stat.label}</p>
-        </div>
-      ))}
-    </section>
+    <div className="text-center">
+      <p className="text-3xl font-semibold tracking-tight">{value}</p>
+      <p className="mt-1 text-sm text-manifest">{label}</p>
+    </div>
+  );
+}
+
+function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: string; body: string }) {
+  return (
+    <div className="max-w-2xl">
+      <span className="text-xs font-medium uppercase tracking-wider text-manifest">{eyebrow}</span>
+      <h2 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{title}</h2>
+      <p className="mt-3 text-sm text-manifest">{body}</p>
+    </div>
   );
 }
 
 function FeatureCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="bg-ink p-6">
+    <div className="flex h-full flex-col rounded-lg border border-border p-6">
       <p className="font-medium text-vellum">{title}</p>
       <p className="mt-2 text-sm text-manifest">{body}</p>
     </div>
   );
 }
 
-/**
- * Sticky card-stack: "How it works" pins in place while the page keeps
- * scrolling, then "Built on Sui" slides up and over it, at which point
- * "How it works" is fully covered and the next section takes the sticky
- * slot. Each stacked panel needs real scroll distance to travel through
- * (a tall wrapper) — a naive sticky-on-both-children approach renders
- * both sections in the same place with no separation, which is illegible
- * (verified this failure mode with a screenshot before fixing it here).
- */
-function StackedSections() {
-  return (
-    <div className="relative mb-24">
-      <StackPanel index={0} zIndex={10}>
-        <HowItWorks />
-      </StackPanel>
-      <StackPanel index={1} zIndex={20}>
-        <BuiltOnSui />
-      </StackPanel>
-    </div>
-  );
-}
-
-function StackPanel({
-  children,
-  index,
-  zIndex,
-}: {
-  children: React.ReactNode;
-  index: number;
-  zIndex: number;
-}) {
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const { scrollYProgress } = useScroll({
-    target: wrapperRef,
-    offset: ["start start", "end start"],
-  });
-
-  // Panels after the first scale down slightly as they arrive, so the
-  // stack reads as depth (like cards being placed on top of one
-  // another) rather than a plain swap.
-  const scale = useTransform(scrollYProgress, [0, 1], index === 0 ? [1, 1] : [0.96, 1]);
-
-  return (
-    <div ref={wrapperRef} className="relative h-[140vh]" style={{ zIndex }}>
-      <motion.div
-        style={{ scale }}
-        className="sticky top-24 mx-auto max-w-6xl rounded-xl border border-border bg-ink shadow-2xl shadow-black"
-      >
-        {children}
-      </motion.div>
-    </div>
-  );
-}
-
-function HowItWorks() {
-  const steps = [
-    {
-      n: "01",
-      title: "Describe the task",
-      body: "Tell your agent what you need in plain language — no forms, no marketplace to browse.",
-    },
-    {
-      n: "02",
-      title: "Funds lock in escrow",
-      body: "Payment is held under a spending mandate you control, the moment a deal starts.",
-    },
-    {
-      n: "03",
-      title: "Work gets verified",
-      body: "Delivered work is checked against what was promised before any payment moves.",
-    },
-    {
-      n: "04",
-      title: "Payment releases automatically",
-      body: "Once verified, funds release and both agents' reputations update on-chain.",
-    },
-  ];
-
-  return (
-    <section className="p-8">
-      <h2 className="text-2xl font-semibold tracking-tight">How it works</h2>
-      <div className="mt-8 grid grid-cols-1 gap-8 sm:grid-cols-2">
-        {steps.map((step) => (
-          <div key={step.n} className="flex gap-4">
-            <span className="font-data text-sm text-manifest">{step.n}</span>
-            <div>
-              <p className="font-medium text-vellum">{step.title}</p>
-              <p className="mt-1 text-sm text-manifest">{step.body}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function BuiltOnSui() {
-  const items = [
-    { name: "zkLogin", role: "Sign in without a seed phrase" },
-    { name: "Programmable Transaction Blocks", role: "Escrow and release, each a single atomic step" },
-    { name: "Seal", role: "Encrypts private negotiation terms" },
-    { name: "Walrus", role: "Stores delivered-work artifacts off-chain" },
-    { name: "Nautilus", role: "Verifies delivered work matches what was promised" },
-    { name: "SuiNS", role: "Human-readable agent identities" },
-  ];
-
-  return (
-    <section className="p-8">
-      <h2 className="text-2xl font-semibold tracking-tight">Built on Sui</h2>
-      <p className="mt-2 max-w-xl text-sm text-manifest">
-        Every piece maps to a real step in the flow — nothing here is bolted on for coverage.
-      </p>
-      <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map((item) => (
-          <div key={item.name} className="rounded-lg border border-border p-4">
-            <p className="font-medium text-vellum">{item.name}</p>
-            <p className="mt-1 text-sm text-manifest">{item.role}</p>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function ClosingCta({ onSignIn }: { onSignIn: () => void }) {
   return (
-    <section className="mb-24 flex flex-col items-center rounded-lg border border-border py-16 text-center">
+    <section className="my-20 flex flex-col items-center rounded-lg border border-border py-16 text-center">
       <h2 className="text-2xl font-semibold tracking-tight">Ready to see it work?</h2>
       <p className="mt-2 max-w-md text-sm text-manifest">
         Sign in and describe a task. Watch the whole chain of trust happen on screen.
