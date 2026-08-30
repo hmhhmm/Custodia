@@ -67,16 +67,6 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
             }}
           />
 
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: "easeOut" }}
-            className="mb-6 flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-1.5 text-xs text-manifest"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            Live on Sui testnet
-          </motion.div>
-
           <motion.h1
             initial="hidden"
             animate="visible"
@@ -125,7 +115,7 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
         </section>
 
         <Reveal>
-          <section id="fees" className="scroll-mt-28 border-y border-border py-6">
+          <section id="fees" className="scroll-mt-28 mt-12 border-y border-border py-6">
             <div className="grid grid-cols-1 gap-8 sm:grid-cols-3">
               <Stat value="0" label="Platform cut" />
               <Stat value="100%" label="Escrowed before work starts" />
@@ -167,7 +157,10 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
             />
             <div className="mt-10 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {HOW_IT_WORKS_STEPS.map((step) => (
-                <div key={step.n} className="flex h-full flex-col rounded-lg border border-border p-5">
+                <div
+                  key={step.n}
+                  className="flex h-full flex-col items-center rounded-lg border border-border p-5 text-center"
+                >
                   <span className="font-data text-sm text-manifest">{step.n}</span>
                   <p className="mt-3 font-medium text-vellum">{step.title}</p>
                   <p className="mt-1 text-sm text-manifest">{step.body}</p>
@@ -188,7 +181,7 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
               {BUILT_ON_SUI_ITEMS.map((item) => (
                 <div
                   key={item.name}
-                  className="flex h-full flex-col rounded-lg border border-border p-5"
+                  className="flex h-full flex-col items-center rounded-lg border border-border p-5 text-center"
                 >
                   <p className="font-medium text-vellum">{item.name}</p>
                   <p className="mt-1 text-sm text-manifest">{item.role}</p>
@@ -396,7 +389,7 @@ function SectionHeading({ eyebrow, title, body }: { eyebrow: string; title: stri
 
 function FeatureCard({ title, body }: { title: string; body: string }) {
   return (
-    <div className="flex h-full flex-col rounded-lg border border-border p-6">
+    <div className="flex h-full flex-col items-center rounded-lg border border-border p-6 text-center">
       <p className="font-medium text-vellum">{title}</p>
       <p className="mt-2 text-sm text-manifest">{body}</p>
     </div>
