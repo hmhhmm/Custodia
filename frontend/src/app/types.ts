@@ -61,3 +61,15 @@ export interface DealReceipt {
    * for real — do not guess the path format. */
   explorerUrl?: string;
 }
+
+/** Row shown on the dashboard's deal history. A deliberately smaller
+ * status vocabulary than StatusStep — the dashboard shows resting state,
+ * not the in-progress sequence (see StatusFeed for that). */
+export type DealSummaryStatus = "escrowed" | "released" | "disputed";
+
+export interface DealSummary {
+  dealId: string;
+  counterpartyName: string;
+  amount: number;
+  status: DealSummaryStatus;
+}
