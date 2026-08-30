@@ -72,4 +72,11 @@ export interface DealSummary {
   counterpartyName: string;
   amount: number;
   status: DealSummaryStatus;
+  /** Category tag shown on the deal card, e.g. "Legal", "Logistics" —
+   * mirrors Mandate.allowed_categories vocabulary once that's wired to
+   * real data (see /docs/ARCHITECTURE.md — still PROPOSED). */
+  category: string;
+  /** Short one-line description of what the deal is for, shown on the
+   * card below the counterparty name. */
+  description: string;
 }
