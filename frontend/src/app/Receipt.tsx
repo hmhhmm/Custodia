@@ -19,7 +19,7 @@ export function Receipt({
     <div className="flex flex-col items-center py-8 text-center">
       <Seal kind={receipt.verification.mocked ? "simulated" : "verified"} size={112} />
 
-      <p className="mt-6 font-display text-xl font-semibold text-vellum">
+      <p className="mt-6 text-xl font-semibold tracking-tight text-vellum">
         Paid {receipt.counterpartyName} · {receipt.amount} SUI
       </p>
       <p className="mt-1 text-sm text-manifest">
@@ -34,7 +34,7 @@ export function Receipt({
           href={receipt.explorerUrl}
           target="_blank"
           rel="noreferrer"
-          className="mt-4 text-sm text-brass underline underline-offset-2"
+          className="mt-4 text-sm text-accent underline underline-offset-2"
         >
           View on Sui Explorer
         </a>
@@ -43,7 +43,7 @@ export function Receipt({
       <button
         type="button"
         onClick={onBackToDeals}
-        className="mt-8 rounded border border-brass/50 px-5 py-2.5 text-sm font-medium text-vellum transition-colors hover:border-brass hover:bg-brass/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
+        className="mt-8 rounded-md bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         Back to your deals
       </button>

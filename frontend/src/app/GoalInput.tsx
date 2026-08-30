@@ -24,17 +24,17 @@ export function GoalInput({
   }
 
   return (
-    <div>
+    <div className="mx-auto max-w-xl">
       <button
         type="button"
         onClick={onBack}
-        className="mb-6 text-sm text-manifest transition-colors hover:text-vellum focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
+        className="mb-6 text-sm text-manifest transition-colors hover:text-vellum focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         ← Back to deals
       </button>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <label htmlFor="goal-input" className="font-display text-xl font-semibold text-vellum">
+        <label htmlFor="goal-input" className="text-xl font-semibold tracking-tight text-vellum">
           What do you need done?
         </label>
         <textarea
@@ -44,12 +44,12 @@ export function GoalInput({
           placeholder="e.g. Review a rental agreement and get feedback within 24 hours"
           rows={4}
           autoFocus
-          className="w-full resize-none rounded border border-brass/40 bg-transparent px-4 py-3 text-base text-vellum placeholder:text-manifest/70 focus:border-brass focus:outline-none"
+          className="w-full resize-none rounded-md border border-border bg-surface px-4 py-3 text-base text-vellum placeholder:text-manifest focus:border-accent focus:outline-none"
         />
         <button
           type="submit"
           disabled={goal.trim().length === 0}
-          className="self-start rounded border border-brass/50 px-5 py-2.5 text-sm font-medium text-vellum transition-colors hover:border-brass hover:bg-brass/10 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
+          className="self-start rounded-md bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           Find an agent
         </button>

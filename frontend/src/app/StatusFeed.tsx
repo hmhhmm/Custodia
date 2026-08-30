@@ -36,9 +36,9 @@ function isVerificationInfo(detail: StatusStep["detail"]): detail is Verificatio
 }
 
 function StepGlyph({ state }: { state: StatusStep["state"] }) {
-  if (state === "done") return <span className="text-verdigris">✓</span>;
-  if (state === "failed") return <span className="text-wax">✕</span>;
-  if (state === "active") return <span className="animate-pulse text-brass">◐</span>;
+  if (state === "done") return <span className="text-emerald-500">✓</span>;
+  if (state === "failed") return <span className="text-red-500">✕</span>;
+  if (state === "active") return <span className="animate-pulse text-accent">◐</span>;
   return <span className="text-manifest">○</span>;
 }
 
@@ -76,7 +76,7 @@ function sealKindFor(stepId: string, detail: StatusStep["detail"]): "locked" | "
 export function StatusFeed({ steps, counterpartyName }: { steps: StatusStep[]; counterpartyName?: string }) {
   return (
     <div>
-      <h1 className="mb-1 font-display text-2xl font-semibold text-vellum">Working on it</h1>
+      <h1 className="mb-1 text-2xl font-semibold tracking-tight text-vellum">Working on it</h1>
       {counterpartyName && (
         <p className="mb-6 text-sm text-manifest">Deal with {counterpartyName}</p>
       )}
@@ -95,7 +95,7 @@ export function StatusFeed({ steps, counterpartyName }: { steps: StatusStep[]; c
                 transition={{ duration: 0.2, ease: "easeOut" }}
               >
                 {showSeal ? (
-                  <div className="flex items-center gap-4 rounded border border-brass/30 bg-brass/5 px-4 py-4">
+                  <div className="flex items-center gap-4 rounded-lg border border-border bg-surface px-4 py-4">
                     <Seal kind={sealKindFor(step.id, step.detail)} size={64} />
                     <div>
                       <p className="font-medium text-vellum">{step.label}</p>
