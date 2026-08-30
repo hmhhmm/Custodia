@@ -11,9 +11,27 @@
 // used in a transaction by its owner, so an owned Mandate could never be spent
 // by the agent it delegates to.
 //
-// This module is the structural enforcement behind the pitch line "this cap is
-// enforced by code, not a promise". `assert_within_mandate` aborts the whole
-// PTB, so escrow cannot be locked at all if the spend is out of bounds.
+// WHAT THIS DOES AND DOES NOT ENFORCE — read before repeating a pitch line.
+//
+// A Mandate is a counter, not a custodian: it holds no Balance, and
+// `deal::create_and_lock_escrow` spends a `Coin<SUI>` from the delegate's own
+// wallet. So the cap constrains A CHANNEL, NOT AN AGENT. Conditional on the
+// spend going through Escrow's escrow flow, the cap, category allowlist,
+// expiry and revocation are hard aborts and `record_spend` is
+// `public(package)`, so the counter cannot be reset from outside the package.
+// That much genuinely is enforced by code. But the delegate address holds its
+// own SUI and can move it anywhere without touching this module at all, and a
+// delegate that hits its cap can self-issue a fresh uncapped Mandate, since
+// `new` makes the sender the owner.
+//
+// Accurate: "spending through Escrow is capped by an on-chain mandate the
+// human can revoke instantly." NOT accurate: "this agent cannot spend more
+// than X." Making the stronger claim true requires the Mandate to custody the
+// funds (a `Balance<SUI>` deposited by the owner, withdrawn by
+// `create_and_lock_escrow`) so the delegate key never has spend authority over
+// the principal. That adds a field to a core object, so per /CLAUDE.md rule 5
+// it needs team sign-off — it is deliberately NOT done here. Ship custody or
+// ship the accurate sentence; do not ship the strong claim over this code.
 module escrow::mandate;
 
 use std::string::String;
@@ -108,7 +126,16 @@ entry fun create_and_share(
     expires_at: u64,
     ctx: &mut TxContext,
 ) {
-    transfer::share_object(new(delegate, max_spend, allowed_categories, expires_at, ctx));
+    share(new(delegate, max_spend, allowed_categories, expires_at, ctx));
+}
+
+/// Shares a Mandate. `Mandate` has `key` and no `store`, so `share_object` is
+/// restricted to this module and `public_share_object` is unavailable — a PTB
+/// that called `new` would otherwise hold a value it cannot consume and the
+/// whole transaction would fail with `UnusedValueWithoutDrop`. This is the
+/// public consume path that makes `new` genuinely composable.
+public fun share(mandate: Mandate) {
+    transfer::share_object(mandate);
 }
 
 /// Aborts unless `amount` in `category` is permitted right now. Called from
@@ -123,7 +150,13 @@ public fun assert_within_mandate(
     assert!(!mandate.revoked, ERevoked);
     assert!(clock.timestamp_ms() < mandate.expires_at, EExpired);
     assert!(mandate.allowed_categories.contains(&category), ECategoryNotAllowed);
-    assert!(mandate.spent_so_far + amount <= mandate.max_spend, ESpendLimitExceeded);
+
+    // Subtraction, not `spent_so_far + amount <= max_spend`: the addition can
+    // overflow u64 and abort with a raw arithmetic error instead of the
+    // intended ESpendLimitExceeded. `spent_so_far <= max_spend` is an invariant
+    // held by `record_spend`, so the subtraction cannot underflow.
+    assert!(mandate.spent_so_far <= mandate.max_spend, ESpendLimitExceeded);
+    assert!(amount <= mandate.max_spend - mandate.spent_so_far, ESpendLimitExceeded);
 }
 
 /// Aborts unless the transaction sender is this mandate's delegate. This is
@@ -134,7 +167,14 @@ public fun assert_is_delegate(mandate: &Mandate, ctx: &TxContext) {
 
 /// Records a spend against the mandate. Package-visible: only Escrow's own
 /// escrow flow may advance `spent_so_far`, never a direct PTB call.
+///
+/// The assert restates what `assert_within_mandate` already guarantees at the
+/// only real call site. It is here because nothing structurally forces the two
+/// to be called as a pair — a future module in this package could call
+/// `record_spend` alone and push `spent_so_far` past `max_spend`, after which
+/// `remaining()` would be permanently broken.
 public(package) fun record_spend(mandate: &mut Mandate, amount: u64) {
+    assert!(amount <= mandate.max_spend - mandate.spent_so_far, ESpendLimitExceeded);
     mandate.spent_so_far = mandate.spent_so_far + amount;
 }
 
@@ -167,8 +207,11 @@ public fun spent_so_far(mandate: &Mandate): u64 {
 }
 
 /// Remaining spendable budget. Convenience for Person 4's mandate snapshot UI.
+/// Saturating: a read-only getter should never abort a caller's transaction,
+/// even if the invariant above were ever violated.
 public fun remaining(mandate: &Mandate): u64 {
-    mandate.max_spend - mandate.spent_so_far
+    if (mandate.spent_so_far >= mandate.max_spend) 0
+    else mandate.max_spend - mandate.spent_so_far
 }
 
 public fun allowed_categories(mandate: &Mandate): vector<String> {

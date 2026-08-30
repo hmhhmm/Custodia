@@ -23,7 +23,7 @@ use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 use sui::event;
 use sui::sui::SUI;
-use escrow::agent_identity::AgentIdentity;
+use escrow::agent_identity::{AgentIdentity, AgentRegistry};
 use escrow::mandate::Mandate;
 use escrow::reputation::Reputation;
 
@@ -31,7 +31,31 @@ use escrow::reputation::Reputation;
 const ENotSpecialist: vector<u8> = b"Caller is not the specialist agent on this deal";
 
 #[error]
+const ENotClient: vector<u8> = b"Caller is not the client agent on this deal";
+
+#[error]
 const ENotParty: vector<u8> = b"Caller is not a party to this deal";
+
+/// Separate from ENotSpecialist/ENotClient/ENotParty on purpose: identity-match
+/// and identity-ownership are two different failures, and sharing one code made
+/// it impossible for a test to prove which assert actually fired.
+#[error]
+const ENotIdentityOwner: vector<u8> = b"Transaction sender does not own this agent identity";
+
+#[error]
+const EWrongReputation: vector<u8> = b"Reputation object does not belong to this deal's agent";
+
+#[error]
+const ENoProof: vector<u8> = b"Deal has no proof_ref set";
+
+#[error]
+const EZeroAmount: vector<u8> = b"Escrow amount must be greater than zero";
+
+#[error]
+const ESameAgent: vector<u8> = b"Client and specialist must be different agents";
+
+#[error]
+const ESpecialistNotRegistered: vector<u8> = b"Specialist agent is not in the registry";
 
 #[error]
 const EInvalidTransition: vector<u8> = b"Illegal deal status transition";
@@ -59,11 +83,20 @@ public struct Deal has key {
     proof_ref: Option<ID>,
 }
 
+/// `amount` and `category` are carried here because neither is readable from
+/// the Deal after release: `escrowed_amount` drops to zero, and `category` is
+/// consumed by the mandate check and never stored. Person 4's receipt and
+/// dashboard (`DealReceipt.amount`, `DealSummary.category`) have no other
+/// on-chain source, so this event is their only one.
+///
+/// Event structs are frozen at publish like any other, so this field was added
+/// now rather than discovered missing later.
 public struct DealCreated has copy, drop {
     deal_id: ID,
     client_agent: ID,
     specialist_agent: ID,
     amount: u64,
+    category: String,
 }
 
 public struct DealDelivered has copy, drop {
@@ -89,11 +122,19 @@ public struct DealDisputed has copy, drop {
 /// aborts the whole PTB and no escrow is ever created.
 ///
 /// Returns the Deal rather than sharing it internally so the PTB stays
-/// composable; `create_and_share` is the convenience path.
+/// composable — the returned value is consumed with the public `share` below,
+/// or `create_and_share` does both in one call.
+///
+/// Takes the client's `&AgentIdentity` but only the specialist's `ID`, and that
+/// asymmetry is forced: the specialist's identity is an address-owned object
+/// belonging to someone else, and a transaction cannot take another address's
+/// owned object as an input. The specialist is instead validated against the
+/// shared registry, which is enough to reject a fabricated ID.
 public fun create_and_lock_escrow(
     mandate: &mut Mandate,
+    registry: &AgentRegistry,
+    client: &AgentIdentity,
     payment: Coin<SUI>,
-    client_agent: ID,
     specialist_agent: ID,
     category: String,
     clock: &Clock,
@@ -101,24 +142,48 @@ public fun create_and_lock_escrow(
 ): Deal {
     mandate.assert_is_delegate(ctx);
 
+    // Binds the deal's client agent to the mandate's delegate. Previously
+    // `client_agent` was an unvalidated caller-supplied ID, so a delegate could
+    // emit DealCreated naming any victim's agent as the client.
+    assert!(client.owner() == ctx.sender(), ENotIdentityOwner);
+    let client_agent = object::id(client);
+
+    // Blocks self-dealing: one owner controlling both sides of a deal credited
+    // both reputations on release, which made a forged track record free.
+    assert!(client_agent != specialist_agent, ESameAgent);
+    assert!(registry.is_registered(specialist_agent), ESpecialistNotRegistered);
+
     let amount = payment.value();
+    // Zero-value deals cost nothing to create, which is what made reputation
+    // farming and dispute griefing free.
+    assert!(amount > 0, EZeroAmount);
+
     mandate.assert_within_mandate(amount, category, clock);
     mandate.record_spend(amount);
 
-    let deal = Deal {
+    // Constructed at Negotiating and stepped forward through assert_transition
+    // rather than assigned Escrowed directly, so the spec'd first variant is
+    // actually part of the code path. It still does not persist on-chain — a
+    // real negotiation phase would need its own entry point, which is out of
+    // scope — but the state machine is no longer entered by assignment.
+    let mut deal = Deal {
         id: object::new(ctx),
         client_agent,
         specialist_agent,
         escrowed_amount: payment.into_balance(),
-        status: DealStatus::Escrowed,
+        status: DealStatus::Negotiating,
         proof_ref: option::none(),
     };
+
+    assert_transition(&deal.status, &DealStatus::Escrowed);
+    deal.status = DealStatus::Escrowed;
 
     event::emit(DealCreated {
         deal_id: object::id(&deal),
         client_agent,
         specialist_agent,
         amount,
+        category,
     });
 
     deal
@@ -126,8 +191,9 @@ public fun create_and_lock_escrow(
 
 entry fun create_and_share(
     mandate: &mut Mandate,
+    registry: &AgentRegistry,
+    client: &AgentIdentity,
     payment: Coin<SUI>,
-    client_agent: ID,
     specialist_agent: ID,
     category: String,
     clock: &Clock,
@@ -135,13 +201,23 @@ entry fun create_and_share(
 ) {
     let deal = create_and_lock_escrow(
         mandate,
+        registry,
+        client,
         payment,
-        client_agent,
         specialist_agent,
         category,
         clock,
         ctx,
     );
+    share(deal);
+}
+
+/// Shares a Deal. `Deal` has `key` and no `store`, so `share_object` is
+/// restricted to this module and `public_share_object` is unavailable. Without
+/// this public consume path a PTB calling `create_and_lock_escrow` would hold a
+/// value it cannot transfer, share, or drop, and the whole transaction would
+/// fail with `UnusedValueWithoutDrop`.
+public fun share(deal: Deal) {
     transfer::share_object(deal);
 }
 
@@ -154,7 +230,7 @@ public fun mark_delivered(
     ctx: &TxContext,
 ) {
     assert!(object::id(specialist) == deal.specialist_agent, ENotSpecialist);
-    assert!(specialist.owner() == ctx.sender(), ENotSpecialist);
+    assert!(specialist.owner() == ctx.sender(), ENotIdentityOwner);
 
     assert_transition(&deal.status, &DealStatus::Delivered);
     deal.status = DealStatus::Delivered;
@@ -170,23 +246,62 @@ public fun mark_delivered(
 /// internally. Returning it keeps the function composable: the PTB decides
 /// where the payout goes (per the `composable-move-functions` skill).
 ///
+/// CLIENT-ONLY, and that is the security boundary, not a preference. Reaching
+/// `Delivered` requires only the specialist's own signature, and `proof_ref` is
+/// an arbitrary caller-supplied ID that nothing validates — so if the
+/// specialist could also release, they could call `mark_delivered` with a junk
+/// proof and `verify_and_release` in one atomic PTB and take the escrow having
+/// done nothing. Requiring the client's signature here makes that signature the
+/// acceptance step the flow otherwise has nowhere.
+///
+/// This also rules out the wider hole: previously there was NO caller check at
+/// all, so any address on the network could release any delivered deal and
+/// route the payout to itself. Note that widening this to "either party may
+/// call" — mirroring `raise_dispute` — would reopen the specialist self-release
+/// path. It must stay client-only.
+///
 /// NOTE on what "verify" means here: this function confirms the Deal reached
-/// Delivered with a proof_ref set. It does NOT cryptographically verify a
-/// Nautilus attestation on-chain — that would require verifying an AWS
-/// certificate chain in Move, which is out of scope (see
-/// /docs/ARCHITECTURE.md). Do not describe this as on-chain attestation
+/// Delivered with a proof_ref set, and that the client signed off. It does NOT
+/// cryptographically verify a Nautilus attestation on-chain — that would
+/// require verifying an AWS certificate chain in Move, which is out of scope
+/// (see /docs/ARCHITECTURE.md). Do not describe this as on-chain attestation
 /// verification in the demo.
+///
+/// A non-responsive client can currently hold the escrow indefinitely by simply
+/// never calling this. A Clock-based timeout letting the specialist claim after
+/// N ms would close that, and is deliberately NOT built here — it is new scope
+/// and needs team agreement on the window.
 public fun verify_and_release(
     deal: &mut Deal,
+    client: &AgentIdentity,
     client_reputation: &mut Reputation,
     specialist_reputation: &mut Reputation,
     ctx: &mut TxContext,
 ): Coin<SUI> {
+    assert!(object::id(client) == deal.client_agent, ENotClient);
+    assert!(client.owner() == ctx.sender(), ENotIdentityOwner);
+
+    // Without these two, an attacker passes their own Reputation objects and
+    // credits themselves a completed deal off someone else's release.
+    assert!(client_reputation.agent_id() == deal.client_agent, EWrongReputation);
+    assert!(
+        specialist_reputation.agent_id() == deal.specialist_agent,
+        EWrongReputation,
+    );
+
     assert_transition(&deal.status, &DealStatus::Verified);
+
+    // Ordered after the transition guard so that releasing an undelivered deal
+    // still reports EInvalidTransition, which is the more precise failure.
+    // Holds transitively today, since Delivered is only reachable through
+    // mark_delivered, which always sets proof_ref — asserted anyway so the
+    // guarantee is enforced rather than merely described in the comment above.
+    assert!(deal.proof_ref.is_some(), ENoProof);
+
     deal.status = DealStatus::Verified;
 
     let amount = deal.escrowed_amount.value();
-    let payout = coin::from_balance(deal.escrowed_amount.split(amount), ctx);
+    let payout = coin::from_balance(deal.escrowed_amount.withdraw_all(), ctx);
 
     assert_transition(&deal.status, &DealStatus::Released);
     deal.status = DealStatus::Released;
@@ -210,6 +325,16 @@ public fun verify_and_release(
 /// /docs/ARCHITECTURE.md — there is deliberately no function here that moves a
 /// Deal out of Disputed or refunds the escrow. Escrowed funds stay locked in
 /// the Deal object. Do not build resolution logic without flagging it first.
+///
+/// "Locked" is precise, and "burned" would not be: Deal is a shared object and
+/// struct types stay anchored to the original package ID, so a later upgrade
+/// can add a `resolve_dispute` that operates on Deals created today. But that
+/// recovery exists only while the UpgradeCap does — destroying it for
+/// immutability, or losing it, makes every disputed escrow permanently
+/// unreachable. Decide UpgradeCap custody deliberately before publishing.
+///
+/// Either party can still freeze the other's funds indefinitely at the cost of
+/// gas. That is a real griefing primitive and it is not fixed here.
 public fun raise_dispute(
     deal: &mut Deal,
     party: &AgentIdentity,
@@ -222,7 +347,16 @@ public fun raise_dispute(
         party_id == deal.client_agent || party_id == deal.specialist_agent,
         ENotParty,
     );
-    assert!(party.owner() == ctx.sender(), ENotParty);
+    assert!(party.owner() == ctx.sender(), ENotIdentityOwner);
+
+    // Same binding as verify_and_release, in the other direction. Without it, a
+    // party to any throwaway deal could pass a rival's Reputation and drive
+    // their score down for the cost of gas.
+    assert!(client_reputation.agent_id() == deal.client_agent, EWrongReputation);
+    assert!(
+        specialist_reputation.agent_id() == deal.specialist_agent,
+        EWrongReputation,
+    );
 
     assert_transition(&deal.status, &DealStatus::Disputed);
     deal.status = DealStatus::Disputed;

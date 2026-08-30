@@ -26,6 +26,17 @@ const COLD_START_SCORE: u64 = 50;
 /// Maximum score, i.e. an agent with completed deals and zero disputes.
 const MAX_SCORE: u64 = 100;
 
+/// Pseudo-count of COLD_START_SCORE-weighted "virtual" deals blended into every
+/// score. Without it the formula has a one-deal cliff: a brand-new agent with a
+/// single completed deal scores a perfect 100 and outranks an agent with 999
+/// completed and 1 disputed (99). That made a single self-dealt, zero-value
+/// deal the cheapest way to top Person 4's discovery ranking.
+///
+/// With the prior, one completion scores 58 and the score approaches 100 only
+/// with real volume, so a forged record buys almost nothing. Cold start is
+/// unchanged at exactly COLD_START_SCORE.
+const PRIOR_WEIGHT: u64 = 5;
+
 public struct Reputation has key {
     id: UID,
     agent_id: ID,
@@ -45,28 +56,52 @@ public struct ReputationUpdated has copy, drop {
 /// Creates a fresh Reputation for `agent_id` at the cold-start score.
 ///
 /// Returns the object rather than sharing it internally, so a PTB can create
-/// an AgentIdentity and its Reputation in one composable transaction. Use
-/// `create_and_share` for the non-composable convenience path.
+/// an AgentIdentity and its Reputation in one transaction. A caller that just
+/// wants it shared passes the result straight to `share` below.
+///
+/// Emits the genesis `ReputationUpdated` so an indexer built on that event
+/// alone sees the cold-start score. Every later change emits the same event, so
+/// the event stream is now complete from creation.
 public fun new(agent_id: ID, ctx: &mut TxContext): Reputation {
-    Reputation {
+    let reputation = Reputation {
         id: object::new(ctx),
         agent_id,
         completed_deals: 0,
         disputed_deals: 0,
         score: COLD_START_SCORE,
-    }
-}
+    };
 
-entry fun create_and_share(agent_id: ID, ctx: &mut TxContext) {
-    transfer::share_object(new(agent_id, ctx));
+    event::emit(ReputationUpdated {
+        reputation_id: object::id(&reputation),
+        agent_id,
+        completed_deals: 0,
+        disputed_deals: 0,
+        score: COLD_START_SCORE,
+    });
+
+    reputation
 }
 
 /// Shares a Reputation. Needed because `Reputation` deliberately has only
 /// `key` and not `store`: without `store` it cannot be wrapped inside another
 /// object or moved by `public_transfer`, which keeps an agent's track record
 /// from being hidden or traded. The cost is that `transfer::share_object` is
-/// restricted to this module, so sibling modules go through this helper.
-public(package) fun share(reputation: Reputation) {
+/// restricted to this module, so every other caller goes through this helper.
+///
+/// `public`, not `public(package)`, and that visibility is load-bearing: a PTB
+/// that calls `new` (or `agent_identity::register`) receives a `key`-only,
+/// non-`drop` value it MUST consume before the transaction ends. It cannot use
+/// `public_share_object`, which requires `store`. Without a public way to
+/// consume it the whole transaction fails with `UnusedValueWithoutDrop`, which
+/// is exactly what made the "composable" constructors uncallable.
+///
+/// There was previously an `entry fun create_and_share(agent_id, ctx)` here.
+/// It is deleted, not widened: it let anyone mint and share a Reputation
+/// claiming any `agent_id`, which supplied the throwaway objects the escrow
+/// drain and reputation-farming attacks both needed. The real path is
+/// `agent_identity::register_and_keep`, which mints exactly one Reputation per
+/// identity and links the two.
+public fun share(reputation: Reputation) {
     transfer::share_object(reputation);
 }
 
@@ -84,15 +119,19 @@ public(package) fun record_disputed(reputation: &mut Reputation) {
     reputation.recalculate();
 }
 
-/// PROPOSED formula — see COLD_START_SCORE above before changing.
+/// PROPOSED formula — see COLD_START_SCORE and PRIOR_WEIGHT above before
+/// changing.
+///
+/// A Bayesian prior: PRIOR_WEIGHT virtual deals held at COLD_START_SCORE are
+/// blended with the real record. At zero deals this reduces exactly to
+/// COLD_START_SCORE, so cold start is unchanged; with volume it converges on
+/// the raw completed/total ratio.
 fun recalculate(reputation: &mut Reputation) {
     let total = reputation.completed_deals + reputation.disputed_deals;
 
-    reputation.score = if (total == 0) {
-        COLD_START_SCORE
-    } else {
-        (MAX_SCORE * reputation.completed_deals) / total
-    };
+    reputation.score =
+        (MAX_SCORE * reputation.completed_deals + COLD_START_SCORE * PRIOR_WEIGHT)
+            / (total + PRIOR_WEIGHT);
 
     event::emit(ReputationUpdated {
         reputation_id: object::id(reputation),

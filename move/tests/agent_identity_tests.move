@@ -10,7 +10,7 @@ module escrow::agent_identity_tests;
 use std::string::String;
 use std::unit_test::{assert_eq, destroy};
 use sui::test_scenario::{Self, Scenario};
-use escrow::agent_identity::{Self, AgentRegistry};
+use escrow::agent_identity::{Self, AgentIdentity, AgentRegistry};
 use escrow::reputation::{Self, Reputation};
 
 const LAWYER: address = @0xA;
@@ -136,6 +136,107 @@ fun updating_capabilities_updates_the_registry_too() {
     assert!(!agents[0].summary_capabilities().contains(&b"malaysia".to_string()));
 
     destroy(identity);
+    destroy(rep);
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
+
+#[test]
+fun is_registered_finds_only_real_agents() {
+    // `deal::create_and_lock_escrow` relies on this to reject a specialist ID
+    // that names no real agent, which would otherwise strand the escrow.
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    let (identity, rep) = agent_identity::register(
+        &mut registry,
+        b"legal-review".to_string(),
+        legal_caps(),
+        scenario.ctx(),
+    );
+
+    assert!(registry.is_registered(object::id(&identity)));
+
+    // An ID that belongs to no agent at all.
+    let bogus = object::id(&rep);
+    assert!(!registry.is_registered(bogus));
+
+    destroy(identity);
+    destroy(rep);
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = agent_identity::ENameTaken, location = agent_identity)]
+fun a_suins_name_cannot_be_registered_twice() {
+    // Without this, an impostor registers the exact name of a known agent and
+    // is indistinguishable from them in Person 4's discovery list.
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    register(&mut scenario, b"legal-review", legal_caps());
+
+    scenario.next_tx(STRANGER);
+    register(&mut scenario, b"legal-review", legal_caps());
+
+    scenario.end();
+}
+
+#[test]
+fun transferring_ownership_updates_the_identity_and_the_registry() {
+    // Moving the identity with a bare `public_transfer` would leave `owner`
+    // stale, and the identity would be permanently unusable by anyone.
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    let (identity, rep) = agent_identity::register(
+        &mut registry,
+        b"legal-review".to_string(),
+        legal_caps(),
+        scenario.ctx(),
+    );
+    let agent_id = object::id(&identity);
+
+    identity.transfer_ownership(&mut registry, COURIER, scenario.ctx());
+
+    // The registry summary must move in lockstep, or discovery shows the wrong
+    // controller for the agent.
+    let agents = registry.agents();
+    assert_eq!(agents[0].summary_agent_id(), agent_id);
+    assert_eq!(agents[0].summary_owner(), COURIER);
+
+    scenario.next_tx(COURIER);
+    let moved = scenario.take_from_sender<AgentIdentity>();
+    assert_eq!(moved.owner(), COURIER);
+
+    scenario.return_to_sender(moved);
+    destroy(rep);
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = agent_identity::ENotOwner, location = agent_identity)]
+fun non_owner_cannot_transfer_ownership() {
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    let (identity, rep) = agent_identity::register(
+        &mut registry,
+        b"legal-review".to_string(),
+        legal_caps(),
+        scenario.ctx(),
+    );
+
+    scenario.next_tx(STRANGER);
+    identity.transfer_ownership(&mut registry, STRANGER, scenario.ctx());
+
     destroy(rep);
     test_scenario::return_shared(registry);
     scenario.end();

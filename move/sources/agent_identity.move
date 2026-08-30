@@ -17,6 +17,24 @@ use escrow::reputation::{Self, Reputation};
 #[error]
 const ENotOwner: vector<u8> = b"Only the agent owner can perform this action";
 
+#[error]
+const ENameTaken: vector<u8> = b"An agent is already registered under this SuiNS name";
+
+#[error]
+const ERegistryFull: vector<u8> = b"Agent registry is at capacity";
+
+/// Hard cap on registered agents. `agents` is an unbounded vector inside a
+/// shared object, and Sui caps objects at 256 KB. Without a cap, registration
+/// is permissionless and there is no removal function, so a spammer could push
+/// the registry past the object limit — at which point EVERY transaction
+/// touching it aborts, `register_and_keep` and `update_capabilities` alike,
+/// permanently and with no way to shrink it back.
+///
+/// The cap converts that from an irreversible brick into a clean, legible
+/// abort. It does not fix the underlying design; the roadmap answer is still to
+/// consume `AgentRegistered` events off-chain and drop the vector entirely.
+const MAX_REGISTRY_AGENTS: u64 = 256;
+
 public struct AgentIdentity has key, store {
     id: UID,
     owner: address,
@@ -79,13 +97,24 @@ fun init(ctx: &mut TxContext) {
 /// first breaks that cycle — neither object can be built standalone.
 ///
 /// Returns both objects rather than transferring or sharing them, so the pair
-/// stays composable in a PTB. Use `register_and_keep` for the convenience path.
+/// stays composable in a PTB. `AgentIdentity` has `store` so a PTB can
+/// `transferObjects` it; the `Reputation` must be consumed by the now-public
+/// `reputation::share`. Use `register_and_keep` for the convenience path.
+///
+/// `suins_name` is checked for uniqueness against the registry, but NOT for
+/// SuiNS ownership — nothing here proves the registrant controls that name.
+/// Uniqueness alone stops the cheapest impersonation (registering the exact
+/// name of a known agent and being indistinguishable in discovery); proving
+/// ownership needs a real SuiNS lookup, which is Person 2's surface.
 public fun register(
     registry: &mut AgentRegistry,
     suins_name: String,
     capabilities: vector<String>,
     ctx: &mut TxContext,
 ): (AgentIdentity, Reputation) {
+    assert!(registry.agents.length() < MAX_REGISTRY_AGENTS, ERegistryFull);
+    assert!(!registry.is_name_taken(suins_name), ENameTaken);
+
     let id = object::new(ctx);
     let agent_id = id.to_inner();
 
@@ -130,6 +159,43 @@ entry fun register_and_keep(
     let (identity, reputation) = register(registry, suins_name, capabilities, ctx);
     transfer::transfer(identity, ctx.sender());
     reputation.share();
+}
+
+/// Owner-only. Hands the identity to `new_owner` and updates BOTH the `owner`
+/// field and the registry summary in the same call.
+///
+/// `AgentIdentity` has `store`, so a holder can already move it with
+/// `public_transfer`. Doing that without this function permanently soft-bricks
+/// the identity: `owner` is written once at registration and never updated, so
+/// afterwards the new holder fails every `identity.owner() == ctx.sender()`
+/// check while the old owner no longer holds the object. Neither can act, and
+/// any deal the agent is a party to strands.
+///
+/// Note the tradeoff this preserves rather than resolves: because `store` makes
+/// the identity transferable and `Reputation` is bound to the identity object
+/// rather than to an address, a track record can be sold along with the
+/// identity. Removing `store` would make the identity soulbound and match the
+/// reasoning behind `Reputation` withholding it — but abilities cannot be
+/// changed after publish, so raise it with the team before the package ships.
+public fun transfer_ownership(
+    identity: AgentIdentity,
+    registry: &mut AgentRegistry,
+    new_owner: address,
+    ctx: &TxContext,
+) {
+    assert!(ctx.sender() == identity.owner, ENotOwner);
+
+    let agent_id = object::id(&identity);
+    let mut identity = identity;
+    identity.owner = new_owner;
+
+    registry.agents.do_mut!(|summary| {
+        if (summary.agent_id == agent_id) {
+            summary.owner = new_owner;
+        }
+    });
+
+    transfer::transfer(identity, new_owner);
 }
 
 /// Owner-only. Updates the identity and its registry summary together, so
@@ -178,6 +244,21 @@ public fun agents(registry: &AgentRegistry): vector<AgentSummary> {
 
 public fun agent_count(registry: &AgentRegistry): u64 {
     registry.agents.length()
+}
+
+/// True if `agent_id` belongs to an agent registered here.
+///
+/// `deal::create_and_lock_escrow` uses this to reject a specialist ID that
+/// names no real agent. Without the check, a deal can be created against a
+/// fabricated ID that nobody owns, which makes `mark_delivered` unreachable
+/// forever and strands the escrow with no actor able to move it.
+public fun is_registered(registry: &AgentRegistry, agent_id: ID): bool {
+    registry.agents.any!(|summary| summary.agent_id == agent_id)
+}
+
+/// True if any registered agent already claims `suins_name`.
+public fun is_name_taken(registry: &AgentRegistry, suins_name: String): bool {
+    registry.agents.any!(|summary| summary.suins_name == suins_name)
 }
 
 public fun summary_agent_id(summary: &AgentSummary): ID {
