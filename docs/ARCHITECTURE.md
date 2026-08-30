@@ -55,7 +55,7 @@ Person 1 before other people's code depends on it.
 | agent_id | ID | |
 | completed_deals | u64 | |
 | disputed_deals | u64 | |
-| score | u64 | PROPOSED scoring formula — confirm with team before implementing |
+| score | u64 | RESOLVED — `(100*completed + 50*PRIOR_WEIGHT) / (completed + disputed + PRIOR_WEIGHT)`, `PRIOR_WEIGHT = 5`. 0-100. Cold start is exactly 50; one completed deal is 58, not 100. The prior exists so a single self-dealt deal cannot top discovery ranking |
 
 ### Mandate
 | Field | Type | Notes |
@@ -65,7 +65,7 @@ Person 1 before other people's code depends on it.
 | max_spend | u64 | |
 | spent_so_far | u64 | |
 | allowed_categories | vector\<String\> | |
-| expires_at | u64 | PROPOSED representation (epoch ms vs. epoch number) — confirm against Sui Clock docs |
+| expires_at | u64 | RESOLVED — epoch MILLISECONDS, compared against `sui::clock::Clock.timestamp_ms()`. Chosen over an epoch number because a mandate window is sub-epoch and `ctx.epoch_timestamp_ms()` only returns the epoch start. Person 4: `MandateSnapshot.expiresAt` needs a ms conversion |
 | revoked | bool | |
 
 ### Deal
@@ -255,13 +255,55 @@ project, not a follow-up SDK task.
 | 3 — Verification/storage | `/frontend/src/verification/` (or a dedicated services package — propose if a separate Node service is cleaner) — Walrus, Seal, Nautilus attestation flow | Person 1 (what proof_ref should point at), Person 2 (how proof_ref gets written into PTB #2) |
 | 4 — Frontend + orchestration | `/frontend/src/app/` (UI) and `/frontend/src/agent/` (LLM calls, discovery/matching, scripted specialist stand-ins) | Person 2 (transaction request shape), Person 3 (what proof data looks like once available) |
 
-**TBD — fill in once Person 1 deploys to testnet:**
-- Exact Move function names and argument order for
-  `escrow::deal::create_and_lock_escrow`, `escrow::deal::mark_delivered`,
-  `escrow::deal::verify_and_release`, `escrow::mandate::assert_within_mandate`.
-- Package ID / object IDs for any shared objects (e.g. a registry, if one
-  turns out to be needed for discovery — not yet decided).
-- Reputation scoring formula.
+**RESOLVED — the Move side is built and its signatures are final:**
+
+- `escrow::deal::create_and_lock_escrow(&mut Mandate, &AgentRegistry,
+  &AgentIdentity /* client */, Coin<SUI>, ID /* specialist_agent */, String
+  /* category */, &Clock, &mut TxContext) -> Deal`
+- `escrow::deal::mark_delivered(&mut Deal, &AgentIdentity /* specialist */,
+  ID /* proof_ref */, &TxContext)` — a SEPARATE transaction signed by the
+  specialist, not part of either PTB.
+- `escrow::deal::verify_and_release(&mut Deal, &AgentIdentity /* client */,
+  &mut Reputation /* client */, &mut Reputation /* specialist */,
+  &mut TxContext) -> Coin<SUI>` — **client-signed only.**
+- `escrow::mandate::assert_within_mandate(&Mandate, u64, String, &Clock)`
+
+**Notes for Person 2 before building the PTBs:**
+
+- Use the `entry` wrappers — `deal::create_and_share`,
+  `mandate::create_and_share`, `agent_identity::register_and_keep` — or call
+  the returning constructor and consume its value with the matching public
+  `share`. `Deal`, `Mandate` and `Reputation` are `key` without `store`, so a
+  PTB cannot dispose of them any other way and the transaction will fail with
+  `UnusedValueWithoutDrop`.
+- `create_and_share` returns nothing, so read the new Deal's ID from the
+  `DealCreated` event rather than a PTB result.
+- Both create paths need the `Clock` at `0x6` and a `category` string.
+- `verify_and_release` returns the payout `Coin<SUI>`; the PTB chooses the
+  recipient, so `buildVerifyAndReleaseTx` needs a specialist address argument.
+- The demo needs a SECOND funded address holding the specialist's
+  `AgentIdentity`, because `mark_delivered` requires its owner's signature.
+  Nobody currently owns this.
+
+**Registry — decided, built, and shared.** `escrow::agent_identity::init`
+creates and shares exactly one `AgentRegistry`. Person 4's discovery reads it
+via `agents()`, which returns `vector<AgentSummary>` — note `AgentSummary`
+carries `reputation_id`, not the score itself, so ranking needs a second fetch
+per agent. Registration enforces unique SuiNS names and a 256-agent cap.
+
+**Category strings are an exact, case-sensitive match** in
+`assert_within_mandate`. The Move tests use `"legal-review"` while the UI uses
+`["legal", "logistics"]` and `"Legal"`. These must be reconciled into one
+canonical list or the first real PTB #1 aborts with `ECategoryNotAllowed`.
+
+**Still genuinely TBD:**
+- Package ID and the `AgentRegistry` object ID — filled in at deployment.
+  `README.md` needs `VITE_` vars for both; it currently has neither.
+- What `proof_ref` points at. Nothing on-chain creates a proof object yet, so
+  step 8 cannot close. `Deal.proof_ref` is `Option<ID>` and its type is frozen
+  at publish — Person 1 and Person 3 must agree the shape first.
+- `UpgradeCap` custody, which determines whether disputed escrow is ever
+  recoverable.
 
 Do not guess any of the above in frontend or verification code — leave a
 `// VERIFY` / `// TBD` comment and coordinate directly with Person 1
