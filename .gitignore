@@ -29,3 +29,7 @@ yarn-error.log*
 !.vscode/extensions.json
 .idea/
 *.swp
+
+# Ephemeral publication metadata from `sui client test-publish`.
+# The file itself says it should not be committed.
+move/Pub.*.toml
