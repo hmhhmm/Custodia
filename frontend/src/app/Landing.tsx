@@ -1,16 +1,31 @@
 // Owner: Person 4 (frontend + orchestration).
 //
 // Marketing/landing page shown before sign-in. Modern black SaaS
-// register — true neutral grayscale, crisp white primary actions, a
-// single accent color used sparingly — matching Vercel's home page
-// design language per direct design feedback. Motion here is a
-// deliberate staggered hero entrance plus scroll-triggered section
-// reveals; the escrow-lock/verification wax-seal moment inside the app
-// (StatusFeed/Receipt) remains the one place with a heavier, more
-// ornamented animation — this page's motion stays quick and restrained
-// so it doesn't compete with that moment.
+// register — true neutral grayscale, crisp white primary actions —
+// matching Vercel's home page design language per direct design
+// feedback. Built natively on this project's actual stack (Vite +
+// Tailwind + the `motion` package already in use elsewhere in the app)
+// rather than pulling in a second animation library or a Next.js/shadcn
+// component tree that doesn't match this project's setup.
+//
+// Motion: a staggered blur-in hero entrance (headline word-by-word, then
+// subhead/CTA), an ambient radial glow behind the hero (pure CSS, no
+// image asset), and a sticky card-stack scroll effect for the info
+// sections below the fold — each section pins briefly while the next
+// slides over it. The escrow-lock/verification wax-seal moment inside
+// the app (StatusFeed/Receipt) remains the one place with a heavier,
+// more ornamented animation; this page's motion stays quick and
+// restrained so it doesn't compete with that moment.
 
-import { motion } from "motion/react";
+import { useRef } from "react";
+import { motion, useScroll, useTransform } from "motion/react";
+
+const HEADLINE_WORDS = "This isn't a promise. It's proof.".split(" ");
+
+const wordVariants = {
+  hidden: { opacity: 0, y: 14, filter: "blur(8px)" },
+  visible: { opacity: 1, y: 0, filter: "blur(0px)" },
+};
 
 const fadeUp = {
   hidden: { opacity: 0, y: 16 },
@@ -24,9 +39,9 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
         initial={{ opacity: 0, y: -8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: "easeOut" }}
-        className="border-b border-border px-6 py-5"
+        className="border-b border-border px-4 py-4 sm:px-6"
       >
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
+        <div className="mx-auto flex max-w-6xl items-center justify-between">
           <span className="text-base font-semibold tracking-tight">Escrow</span>
           <button
             type="button"
@@ -38,24 +53,54 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
         </div>
       </motion.header>
 
-      <main className="mx-auto max-w-5xl px-6">
-        <section className="flex flex-col items-center py-28 text-center">
+      <main className="mx-auto max-w-6xl px-4 sm:px-6">
+        <section className="relative flex flex-col items-center overflow-hidden py-28 text-center">
+          {/* Ambient glow — pure CSS radial gradient, no image asset. Kept
+              subtle and static (no pulsing loop) so it reads as atmosphere,
+              not another animated element competing for attention. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[36rem] w-[36rem] -translate-x-1/2 -translate-y-1/3 rounded-full opacity-40"
+            style={{
+              background:
+                "radial-gradient(circle, color-mix(in srgb, var(--color-accent) 18%, transparent) 0%, transparent 70%)",
+            }}
+          />
+
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            className="mb-6 flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-1.5 text-xs text-manifest"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            Live on Sui testnet
+          </motion.div>
+
           <motion.h1
             initial="hidden"
             animate="visible"
-            variants={fadeUp}
-            transition={{ duration: 0.5, ease: "easeOut", delay: 0.05 }}
+            transition={{ staggerChildren: 0.06, delayChildren: 0.1 }}
             className="max-w-2xl text-5xl font-semibold tracking-tight sm:text-6xl"
           >
-            This isn't a promise.
-            <br />
-            It's proof.
+            {HEADLINE_WORDS.map((word, i) => (
+              <motion.span
+                key={`${word}-${i}`}
+                variants={wordVariants}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className="inline-block"
+              >
+                {word}
+                {i < HEADLINE_WORDS.length - 1 ? " " : ""}
+              </motion.span>
+            ))}
           </motion.h1>
+
           <motion.p
             initial="hidden"
             animate="visible"
             variants={fadeUp}
-            transition={{ duration: 0.5, ease: "easeOut", delay: 0.15 }}
+            transition={{ duration: 0.5, ease: "easeOut", delay: 0.55 }}
             className="mt-6 max-w-xl text-lg text-manifest"
           >
             Escrow is an on-chain trust and settlement layer on Sui. Tell your agent what you need
@@ -66,7 +111,7 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
             initial="hidden"
             animate="visible"
             variants={fadeUp}
-            transition={{ duration: 0.5, ease: "easeOut", delay: 0.25 }}
+            transition={{ duration: 0.5, ease: "easeOut", delay: 0.65 }}
             className="mt-9 flex flex-col items-center gap-3"
           >
             <button
@@ -105,13 +150,7 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
           </section>
         </Reveal>
 
-        <Reveal delay={0}>
-          <HowItWorks />
-        </Reveal>
-
-        <Reveal delay={0}>
-          <BuiltOnSui />
-        </Reveal>
+        <StackedSections />
 
         <Reveal delay={0}>
           <ClosingCta onSignIn={onSignIn} />
@@ -169,6 +208,60 @@ function FeatureCard({ title, body }: { title: string; body: string }) {
   );
 }
 
+/**
+ * Sticky card-stack: "How it works" pins in place while the page keeps
+ * scrolling, then "Built on Sui" slides up and over it, at which point
+ * "How it works" is fully covered and the next section takes the sticky
+ * slot. Each stacked panel needs real scroll distance to travel through
+ * (a tall wrapper) — a naive sticky-on-both-children approach renders
+ * both sections in the same place with no separation, which is illegible
+ * (verified this failure mode with a screenshot before fixing it here).
+ */
+function StackedSections() {
+  return (
+    <div className="relative mb-24">
+      <StackPanel index={0} zIndex={10}>
+        <HowItWorks />
+      </StackPanel>
+      <StackPanel index={1} zIndex={20}>
+        <BuiltOnSui />
+      </StackPanel>
+    </div>
+  );
+}
+
+function StackPanel({
+  children,
+  index,
+  zIndex,
+}: {
+  children: React.ReactNode;
+  index: number;
+  zIndex: number;
+}) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: wrapperRef,
+    offset: ["start start", "end start"],
+  });
+
+  // Panels after the first scale down slightly as they arrive, so the
+  // stack reads as depth (like cards being placed on top of one
+  // another) rather than a plain swap.
+  const scale = useTransform(scrollYProgress, [0, 1], index === 0 ? [1, 1] : [0.96, 1]);
+
+  return (
+    <div ref={wrapperRef} className="relative h-[140vh]" style={{ zIndex }}>
+      <motion.div
+        style={{ scale }}
+        className="sticky top-24 mx-auto max-w-6xl rounded-xl border border-border bg-ink shadow-2xl shadow-black"
+      >
+        {children}
+      </motion.div>
+    </div>
+  );
+}
+
 function HowItWorks() {
   const steps = [
     {
@@ -194,7 +287,7 @@ function HowItWorks() {
   ];
 
   return (
-    <section className="mb-24">
+    <section className="p-8">
       <h2 className="text-2xl font-semibold tracking-tight">How it works</h2>
       <div className="mt-8 grid grid-cols-1 gap-8 sm:grid-cols-2">
         {steps.map((step) => (
@@ -222,7 +315,7 @@ function BuiltOnSui() {
   ];
 
   return (
-    <section className="mb-24">
+    <section className="p-8">
       <h2 className="text-2xl font-semibold tracking-tight">Built on Sui</h2>
       <p className="mt-2 max-w-xl text-sm text-manifest">
         Every piece maps to a real step in the flow — nothing here is bolted on for coverage.
