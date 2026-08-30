@@ -1,22 +1,32 @@
+/* Font @import must precede the Tailwind import — Tailwind's own
+   processed output contains non-import rules, and CSS requires all
+   @import statements to appear before any other statement, so ordering
+   this after "tailwindcss" gets it silently dropped by the browser. */
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
 @import "tailwindcss";
 
 /*
- * Design tokens for the Envoy UI (Warrant's front end).
- * Dark mode is the default and only theme for this hackathon build — see
- * /docs/ARCHITECTURE.md and the Person 4 design direction: near-black
- * (not pure #000) backgrounds, desaturated accent colors, glass cards
- * used deliberately for the live status feed.
+ * Design tokens for the Warrant / Envoy UI.
+ *
+ * Visual language is drawn deliberately from the real-world vernacular of
+ * binding, verifiable instruments — ledgers, wax seals, notary stamps,
+ * engraved banknotes — rather than generic crypto-dashboard defaults
+ * (near-black + neon accent, glassmorphism). See the design brainstorm
+ * for the full rationale. Sealing Wax is the signature color and is
+ * deliberately NOT used as a general UI accent — it is reserved for the
+ * escrow-lock / verified-release stamp moment only.
  */
 @theme {
-  --color-warrant-bg: #0f1419;
-  --color-warrant-surface: #161c24;
-  --color-warrant-border: #262f3a;
-  --color-warrant-accent: #5eb3a3; /* desaturated teal, ~12% below a naive bright #22c1a8 */
-  --color-warrant-accent-dim: #3d766c;
-  --color-warrant-text: #e6ebf0;
-  --color-warrant-text-dim: #8b98a5;
-  --color-warrant-danger: #c9645a; /* desaturated red */
-  --color-warrant-success: #6bb894; /* desaturated green */
+  --color-ink: #1c1a16; /* primary background — warm near-black, ink-soaked paper */
+  --color-vellum: #e8e1d3; /* primary text / paper-toned foreground */
+  --color-manifest: #8a8375; /* secondary text, muted labels — warm grey */
+  --color-wax: #8c2f1e; /* signature accent — escrow-lock stamp ONLY */
+  --color-verdigris: #5b7a6e; /* verified / done state — aged copper-green */
+  --color-brass: #b08d4f; /* hairlines, borders, dividers */
+
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 html {
@@ -24,22 +34,26 @@ html {
 }
 
 body {
-  background: radial-gradient(
-    circle at 20% 0%,
-    color-mix(in srgb, var(--color-warrant-accent) 8%, transparent),
-    transparent 45%
-  ), var(--color-warrant-bg);
-  color: var(--color-warrant-text);
+  background: var(--color-ink);
+  color: var(--color-vellum);
+  font-family: var(--font-body);
 }
 
 /*
- * Glass card utility for the live status feed. Deliberately restrained
- * blur (per design direction: heavy blur hurts legibility on a projector
- * or screen-share during judging).
+ * Hairline rule in the brass tone — used sparingly (shell header, ledger
+ * row dividers). Not a broadsheet grid of rules everywhere.
  */
-.glass-card {
-  background: color-mix(in srgb, var(--color-warrant-surface) 70%, transparent);
-  border: 1px solid var(--color-warrant-border);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+.rule-brass {
+  border-color: color-mix(in srgb, var(--color-brass) 35%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
