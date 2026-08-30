@@ -1,22 +1,21 @@
 // Owner: Person 4 (frontend + orchestration).
 //
-// Live status feed — the demo centerpiece. Renders each step of the
-// searching -> negotiating -> escrow -> verified -> paid flow as a glass
-// card that appears/updates via a `motion` animation as the corresponding
-// event actually happens.
+// Live status feed — the demo centerpiece. Renders each step as a plain
+// ledger line (✓ done / ○ pending), deliberately NOT as decorative
+// glass/shadow cards — the point is that this reads like a real record
+// being written, not a widget. The escrow-lock and verification steps
+// are the two exceptions: they break the list rhythm with the Seal
+// signature component, because those are the one moment the whole brief
+// is about.
 //
-// IMPORTANT: this component is a pure renderer — it takes `steps` as a
-// prop and animates state transitions, but does NOT itself decide when a
-// step completes. That decision belongs to real on-chain/off-chain
-// events once Person 1/2/3's work is wired up (PTB #1 confirmation,
-// Person 3's verification result, PTB #2 confirmation, etc.) — do not
-// drive this with an arbitrary setTimeout sequence once those real
-// integration points exist. Until they are, the caller (see App.tsx) is
-// responsible for clearly marking which steps are driven by placeholder
-// data.
+// This component is a pure renderer — it takes `steps` as a prop and
+// animates state transitions, but does NOT itself decide when a step
+// completes. See demoStatusSequence.ts for the current placeholder
+// driver and what it must be replaced with once Person 1/2/3's real
+// integration points exist.
 
 import { AnimatePresence, motion } from "motion/react";
-import { GlassCard } from "./components/GlassCard";
+import { Seal } from "./components/Seal";
 import type {
   CandidateInfo,
   MandateSnapshot,
@@ -36,97 +35,95 @@ function isVerificationInfo(detail: StatusStep["detail"]): detail is Verificatio
   return typeof detail === "object" && detail !== null && "attestationId" in detail;
 }
 
-function StateIndicator({ state }: { state: StatusStep["state"] }) {
-  const styles: Record<StatusStep["state"], string> = {
-    pending: "bg-warrant-border text-warrant-text-dim",
-    active: "bg-warrant-accent-dim text-warrant-text animate-pulse",
-    done: "bg-warrant-success/20 text-warrant-success",
-    failed: "bg-warrant-danger/20 text-warrant-danger",
-  };
-  const labels: Record<StatusStep["state"], string> = {
-    pending: "Pending",
-    active: "In progress",
-    done: "Done",
-    failed: "Failed",
-  };
+function StepGlyph({ state }: { state: StatusStep["state"] }) {
+  if (state === "done") return <span className="text-verdigris">✓</span>;
+  if (state === "failed") return <span className="text-wax">✕</span>;
+  if (state === "active") return <span className="animate-pulse text-brass">◐</span>;
+  return <span className="text-manifest">○</span>;
+}
+
+function DetailLine({ detail }: { detail: StatusStep["detail"] }) {
+  if (!detail || typeof detail !== "string") return null;
+  return <p className="mt-1 pl-6 text-sm text-manifest">{detail}</p>;
+}
+
+function CandidateLine({ detail }: { detail: CandidateInfo }) {
   return (
-    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${styles[state]}`}>
-      {labels[state]}
-    </span>
+    <p className="mt-1 pl-6 font-data text-sm text-manifest">
+      {detail.suinsName} · Reputation {detail.reputationScore}
+    </p>
   );
 }
 
-function StepDetail({ detail }: { detail: StatusStep["detail"] }) {
-  if (!detail) return null;
-
-  if (typeof detail === "string") {
-    return <p className="mt-2 text-sm text-warrant-text-dim">{detail}</p>;
-  }
-
-  if (isCandidateInfo(detail)) {
-    return (
-      <div className="mt-2 flex items-center gap-3 text-sm text-warrant-text-dim">
-        <span className="font-mono text-warrant-text">{detail.suinsName}</span>
-        <span>·</span>
-        <span>Reputation {detail.reputationScore}</span>
-      </div>
-    );
-  }
-
-  if (isMandateSnapshot(detail)) {
-    return (
-      <div className="mt-2 rounded-lg border border-warrant-border bg-warrant-bg/40 px-3 py-2 text-sm text-warrant-text-dim">
-        <div>
-          Spend limit: {detail.spentSoFar} / {detail.maxSpend}
-        </div>
-        <div>Categories: {detail.allowedCategories.join(", ")}</div>
-        <div>Expires: {detail.expiresAt}</div>
-      </div>
-    );
-  }
-
-  if (isVerificationInfo(detail)) {
-    return (
-      <div className="mt-2 flex items-center gap-2 text-sm">
-        <span className="font-mono text-warrant-text-dim">{detail.attestationId}</span>
-        {detail.mocked ? (
-          <span className="rounded-full bg-warrant-danger/20 px-2 py-0.5 text-xs font-medium text-warrant-danger">
-            Simulated for demo
-          </span>
-        ) : (
-          <span className="rounded-full bg-warrant-success/20 px-2 py-0.5 text-xs font-medium text-warrant-success">
-            Verified
-          </span>
-        )}
-      </div>
-    );
-  }
-
-  return null;
+function MandateLine({ detail }: { detail: MandateSnapshot }) {
+  return (
+    <p className="mt-1 pl-6 font-data text-sm text-manifest">
+      {detail.spentSoFar} / {detail.maxSpend} SUI · {detail.allowedCategories.join(", ")} · expires{" "}
+      {detail.expiresAt}
+    </p>
+  );
 }
 
-export function StatusFeed({ steps }: { steps: StatusStep[] }) {
+/** Steps that get the full Seal treatment instead of a plain ledger line. */
+const SEALED_STEPS = new Set(["escrow-locked", "verification"]);
+
+function sealKindFor(stepId: string, detail: StatusStep["detail"]): "locked" | "verified" | "simulated" {
+  if (stepId === "escrow-locked") return "locked";
+  if (isVerificationInfo(detail) && detail.mocked) return "simulated";
+  return "verified";
+}
+
+export function StatusFeed({ steps, counterpartyName }: { steps: StatusStep[]; counterpartyName?: string }) {
   return (
-    <div className="mx-auto flex min-h-screen max-w-2xl flex-col gap-3 px-6 py-12">
-      <h2 className="mb-2 text-lg font-medium text-warrant-text">Working on it</h2>
+    <div>
+      <h1 className="mb-1 font-display text-2xl font-semibold text-vellum">Working on it</h1>
+      {counterpartyName && (
+        <p className="mb-6 text-sm text-manifest">Deal with {counterpartyName}</p>
+      )}
+
       <AnimatePresence initial={false}>
-        {steps.map((step) => (
-          <motion.div
-            key={step.id}
-            layout
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, ease: "easeOut" }}
-          >
-            <GlassCard>
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-medium text-warrant-text">{step.label}</span>
-                <StateIndicator state={step.state} />
-              </div>
-              <StepDetail detail={step.detail} />
-            </GlassCard>
-          </motion.div>
-        ))}
+        <div className="flex flex-col gap-3">
+          {steps.map((step) => {
+            const showSeal = SEALED_STEPS.has(step.id) && step.state === "done";
+
+            return (
+              <motion.div
+                key={step.id}
+                layout
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+              >
+                {showSeal ? (
+                  <div className="flex items-center gap-4 rounded border border-brass/30 bg-brass/5 px-4 py-4">
+                    <Seal kind={sealKindFor(step.id, step.detail)} size={64} />
+                    <div>
+                      <p className="font-medium text-vellum">{step.label}</p>
+                      <DetailLine detail={step.detail} />
+                      {isVerificationInfo(step.detail) && (
+                        <p className="mt-1 font-data text-sm text-manifest">
+                          {step.detail.attestationId}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center gap-3 text-sm">
+                      <StepGlyph state={step.state} />
+                      <span className={step.state === "pending" ? "text-manifest" : "text-vellum"}>
+                        {step.label}
+                      </span>
+                    </div>
+                    {isCandidateInfo(step.detail) && <CandidateLine detail={step.detail} />}
+                    {isMandateSnapshot(step.detail) && <MandateLine detail={step.detail} />}
+                    <DetailLine detail={step.detail} />
+                  </div>
+                )}
+              </motion.div>
+            );
+          })}
+        </div>
       </AnimatePresence>
     </div>
   );

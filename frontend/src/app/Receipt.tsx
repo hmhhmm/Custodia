@@ -1,75 +1,51 @@
 // Owner: Person 4 (frontend + orchestration).
 //
-// Receipt screen: final delivered result plus a compact on-chain receipt
-// summary. `explorerUrl` is optional and left unset until the exact Sui
-// testnet explorer URL pattern is confirmed — see DealReceipt in
-// ./types.ts. Do not guess the explorer path format.
+// Receipt screen: closes the loop back to the dashboard. Per the design
+// brief, "Back to your deals" must land on a dashboard that now includes
+// this deal — state visibly persists rather than the receipt being a
+// dead end. See App.tsx for how the new DealSummary gets appended.
 
-import { motion } from "motion/react";
-import { GlassCard } from "./components/GlassCard";
+import { Seal } from "./components/Seal";
 import type { DealReceipt } from "./types";
 
 export function Receipt({
   receipt,
-  onStartOver,
+  onBackToDeals,
 }: {
   receipt: DealReceipt;
-  onStartOver: () => void;
+  onBackToDeals: () => void;
 }) {
   return (
-    <div className="mx-auto flex min-h-screen max-w-xl flex-col justify-center gap-6 px-6 py-12">
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, ease: "easeOut" }}
-      >
-        <h2 className="text-2xl font-semibold text-warrant-text">Done.</h2>
-        <p className="mt-1 text-sm text-warrant-text-dim">
-          Paid automatically once verified — no manual approval step.
-        </p>
-      </motion.div>
+    <div className="flex flex-col items-center py-8 text-center">
+      <Seal kind={receipt.verification.mocked ? "simulated" : "verified"} size={112} />
 
-      <GlassCard>
-        <dl className="grid grid-cols-2 gap-y-3 text-sm">
-          <dt className="text-warrant-text-dim">Amount</dt>
-          <dd className="text-right font-mono text-warrant-text">{receipt.amount} SUI</dd>
+      <p className="mt-6 font-display text-xl font-semibold text-vellum">
+        Paid {receipt.counterpartyName} · {receipt.amount} SUI
+      </p>
+      <p className="mt-1 text-sm text-manifest">
+        {receipt.verification.mocked
+          ? "Verified by a simulated attestation — see README for the real Nautilus integration path."
+          : "Verified by Nautilus attestation."}
+      </p>
+      <p className="mt-1 font-data text-xs text-manifest">{receipt.verification.attestationId}</p>
 
-          <dt className="text-warrant-text-dim">Paid to</dt>
-          <dd className="text-right font-mono text-warrant-text">{receipt.counterpartyName}</dd>
-
-          <dt className="text-warrant-text-dim">Verification</dt>
-          <dd className="text-right text-warrant-text">
-            {receipt.verification.mocked ? (
-              <span className="text-warrant-danger">Simulated for demo</span>
-            ) : (
-              <span className="text-warrant-success">Nautilus attestation</span>
-            )}
-          </dd>
-
-          {receipt.explorerUrl && (
-            <>
-              <dt className="text-warrant-text-dim">On-chain record</dt>
-              <dd className="text-right">
-                <a
-                  href={receipt.explorerUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-warrant-accent underline underline-offset-2"
-                >
-                  View on Sui Explorer
-                </a>
-              </dd>
-            </>
-          )}
-        </dl>
-      </GlassCard>
+      {receipt.explorerUrl && (
+        <a
+          href={receipt.explorerUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 text-sm text-brass underline underline-offset-2"
+        >
+          View on Sui Explorer
+        </a>
+      )}
 
       <button
         type="button"
-        onClick={onStartOver}
-        className="self-start rounded-lg border border-warrant-border px-4 py-2 text-sm font-medium text-warrant-text-dim transition-colors hover:border-warrant-accent-dim hover:text-warrant-text"
+        onClick={onBackToDeals}
+        className="mt-8 rounded border border-brass/50 px-5 py-2.5 text-sm font-medium text-vellum transition-colors hover:border-brass hover:bg-brass/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
       >
-        Start another task
+        Back to your deals
       </button>
     </div>
   );
