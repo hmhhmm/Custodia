@@ -1,23 +1,32 @@
 // Owner: Person 4 (frontend + orchestration).
 //
-// DEMO-ONLY scripted status sequence. This exists purely so the live
-// status feed has something real to render before Person 1/2/3's actual
-// integration points (PTB confirmations, on-chain reads, Person 3's
-// verification result) are wired up. It is explicitly NOT the pattern
-// the design direction calls for long-term — per /docs/ARCHITECTURE.md
-// and the Person 4 design brief, each step should be driven by a real
-// on-chain/off-chain event, not an arbitrary setTimeout sequence.
+// Status sequence driving the live status feed. Steps 1–5 (searching
+// through escrow-locked) are still scripted on placeholder data — they
+// depend on Person 1's on-chain discovery/Mandate reads and Person 2's
+// PTB #1, neither of which exist yet. Steps 6–7 (work-in-progress,
+// verification) now call the REAL verification-layer functions:
+//   - storeBlob() from verification/walrus.ts — a genuine HTTP PUT to the
+//     public Walrus testnet publisher, not simulated in the UI.
+//   - mockNautilusAttest() from verification/nautilus.mock.ts — the
+//     real (mocked-by-design) attestation function, not a hardcoded
+//     `{ mocked: true }` literal in this file.
+// This means the `mocked` flag and `attestationId` shown to the user now
+// genuinely come from the verification layer, and the resultHash in the
+// attestation is a real SHA-256 of the (synthetic, demo) deliverable
+// bytes that were actually stored on Walrus.
 //
-// Replace call sites of runDemoStatusSequence with real event-driven
-// updates once:
-//   - Person 2's PTB #1 (lock-escrow-and-create-deal) resolves -> drives
-//     "escrow-locked"
-//   - Person 3's verification module (real or nautilus.mock.ts) resolves
-//     -> drives "verification" (and must carry through the real `mocked`
-//     flag — do not hardcode `mocked: true` once real Nautilus exists)
+// Still TO REPLACE once Person 1/2's real integration points exist:
+//   - Person 2's PTB #1 (lock-escrow-and-create-deal) resolves -> should
+//     drive "escrow-locked" instead of a timed step
 //   - Person 2's PTB #2 (verify-and-release-and-update-reputation)
-//     resolves -> drives "payment-released" and "reputation-updated"
+//     resolves -> should drive "payment-released" and "reputation-updated"
+//   - Seal encryption of negotiation terms (verification/seal.ts) is
+//     still blocked on @mysten/seal not being installed and
+//     escrow::deal_access not being implemented — not wired here, the
+//     "negotiating" step stays scripted.
 
+import { storeBlob } from "../verification/walrus";
+import { mockNautilusAttest } from "../verification/nautilus.mock";
 import type { DealReceipt, StatusStep } from "./types";
 
 const STEP_DELAY_MS = 650;
@@ -86,18 +95,43 @@ export async function runDemoStatusSequence(
 
   steps[4].state = "done";
   steps[5].state = "active";
+  steps[5].detail = "Uploading to Walrus testnet — this can take several seconds.";
   emit();
-  await wait(STEP_DELAY_MS);
+
+  // REAL: store a synthetic deliverable on Walrus testnet. The content
+  // itself is still a demo placeholder (there is no real specialist
+  // agent producing work yet) — but the storage call, the resulting
+  // blobId, and the network round-trip are genuine.
+  const deliverableText = `Deliverable for: ${goal}\nProduced by: legal-review.sui\nTimestamp: ${new Date().toISOString()}`;
+  let blobId: string;
+  try {
+    const stored = await storeBlob(deliverableText);
+    blobId = stored.blobId;
+  } catch (err) {
+    steps[5].state = "failed";
+    steps[5].detail = `Walrus storage failed: ${err instanceof Error ? err.message : String(err)}`;
+    emit();
+    throw err;
+  }
 
   steps[5].state = "done";
+  steps[5].detail = `Stored on Walrus · blob ${blobId}`;
   steps[6].state = "active";
   emit();
-  await wait(STEP_DELAY_MS);
+
+  // REAL: call the actual (mocked-by-design) Nautilus attestation
+  // function against the bytes that were really stored above. The
+  // `mocked` flag below comes from mockNautilusAttest's real return
+  // value, not a literal written in this file.
+  const attestation = await mockNautilusAttest(
+    "demo-deal-0001",
+    new TextEncoder().encode(deliverableText),
+  );
 
   steps[6].state = "done";
   steps[6].detail = {
-    mocked: true,
-    attestationId: "mock-attest-demo",
+    mocked: attestation.mocked,
+    attestationId: attestation.attestationId,
   };
   steps[7].state = "active";
   emit();
@@ -116,6 +150,6 @@ export async function runDemoStatusSequence(
     dealId: "demo-deal-0001",
     amount: 12,
     counterpartyName: "legal-review.sui",
-    verification: { mocked: true, attestationId: "mock-attest-demo" },
+    verification: { mocked: attestation.mocked, attestationId: attestation.attestationId },
   });
 }
