@@ -17,7 +17,7 @@
 // more ornamented animation; this page's motion stays quick and
 // restrained so it doesn't compete with that moment.
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, useScroll, useTransform } from "motion/react";
 
 const HEADLINE_WORDS = "This isn't a promise. It's proof.".split(" ");
@@ -35,23 +35,10 @@ const fadeUp = {
 export function Landing({ onSignIn }: { onSignIn: () => void }) {
   return (
     <div className="min-h-screen bg-ink text-vellum">
-      <motion.header
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: "easeOut" }}
-        className="border-b border-border px-4 py-4 sm:px-6"
-      >
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
-          <span className="text-base font-semibold tracking-tight">Escrow</span>
-          <button
-            type="button"
-            onClick={onSignIn}
-            className="rounded-md border border-border px-4 py-2 text-sm font-medium text-vellum transition-colors hover:border-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            Sign in
-          </button>
-        </div>
-      </motion.header>
+      <FloatingHeader onSignIn={onSignIn} />
+
+      {/* Spacer so hero content doesn't render under the fixed header. */}
+      <div className="h-[72px]" aria-hidden="true" />
 
       <main className="mx-auto max-w-6xl px-4 sm:px-6">
         <section className="relative flex flex-col items-center overflow-hidden py-28 text-center">
@@ -157,11 +144,120 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
         </Reveal>
       </main>
 
-      <footer className="border-t border-border px-6 py-8 text-center text-xs text-manifest">
-        Escrow is a hackathon build on Sui testnet. Verification steps clearly labeled as
-        simulated are not backed by real on-chain attestation yet.
-      </footer>
+      <Footer onSignIn={onSignIn} />
     </div>
+  );
+}
+
+/**
+ * Floating header: full-width and flush against the top on first paint,
+ * then — once the user scrolls past a threshold — animates into a
+ * narrower, rounded, blurred floating bar. This is the nav "shrink to
+ * pill" behavior from the reference: tracked via a scroll listener
+ * (native, no scroll-library dependency) and animated with `motion`'s
+ * layout-aware width/radius/blur transition.
+ */
+function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
+  const [isScrolled, setIsScrolled] = useState(false);
+
+  useEffect(() => {
+    function handleScroll() {
+      setIsScrolled(window.scrollY > 40);
+    }
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  return (
+    <motion.header
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: "easeOut" }}
+      className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-3"
+    >
+      <motion.div
+        animate={{
+          maxWidth: isScrolled ? 640 : 1152,
+          borderRadius: isScrolled ? 16 : 0,
+          paddingLeft: isScrolled ? 20 : 0,
+          paddingRight: isScrolled ? 20 : 0,
+        }}
+        transition={{ duration: 0.35, ease: "easeInOut" }}
+        className={`flex w-full items-center justify-between px-4 py-3 sm:px-6 ${
+          isScrolled
+            ? "border border-border bg-ink/70 shadow-lg shadow-black/40 backdrop-blur-lg"
+            : "border-b border-transparent"
+        }`}
+        style={{ maxWidth: isScrolled ? 640 : 1152 }}
+      >
+        <span className="text-base font-semibold tracking-tight">Escrow</span>
+        <button
+          type="button"
+          onClick={onSignIn}
+          className="rounded-md border border-border px-4 py-2 text-sm font-medium text-vellum transition-colors hover:border-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Sign in
+        </button>
+      </motion.div>
+    </motion.header>
+  );
+}
+
+function Footer({ onSignIn }: { onSignIn: () => void }) {
+  const columns = [
+    {
+      heading: "Product",
+      links: ["Dashboard", "How it works", "Built on Sui"],
+    },
+    {
+      heading: "Resources",
+      links: ["Architecture", "GitHub", "Sui docs"],
+    },
+    {
+      heading: "Legal",
+      links: ["Terms", "Privacy"],
+    },
+  ];
+
+  return (
+    <footer className="border-t border-border px-6 py-16">
+      <div className="mx-auto grid max-w-6xl grid-cols-2 gap-12 sm:grid-cols-4">
+        <div className="col-span-2 sm:col-span-1">
+          <span className="text-base font-semibold tracking-tight">Escrow</span>
+          <p className="mt-3 max-w-xs text-sm text-manifest">
+            On-chain trust and settlement for AI agents, built on Sui.
+          </p>
+          <button
+            type="button"
+            onClick={onSignIn}
+            className="mt-5 rounded-md border border-border px-4 py-2 text-sm font-medium text-vellum transition-colors hover:border-white/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            Sign in
+          </button>
+        </div>
+
+        {columns.map((col) => (
+          <div key={col.heading}>
+            <p className="text-sm font-medium text-vellum">{col.heading}</p>
+            <ul className="mt-3 flex flex-col gap-2">
+              {col.links.map((link) => (
+                <li key={link}>
+                  <span className="text-sm text-manifest">{link}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+
+      <div className="mx-auto mt-12 flex max-w-6xl flex-col items-start justify-between gap-3 border-t border-border pt-6 text-xs text-manifest sm:flex-row sm:items-center">
+        <span>© 2026 Escrow. Hackathon build on Sui testnet.</span>
+        <span>
+          Verification steps clearly labeled as simulated are not backed by real on-chain
+          attestation yet.
+        </span>
+      </div>
+    </footer>
   );
 }
 
