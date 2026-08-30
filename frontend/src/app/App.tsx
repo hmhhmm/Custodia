@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AppShell, type NavItem } from "./components/AppShell";
+import { Landing } from "./Landing";
 import { Dashboard } from "./Dashboard";
 import { GoalInput } from "./GoalInput";
 import { StatusFeed } from "./StatusFeed";
@@ -20,7 +21,30 @@ import type { DealReceipt, DealSummary, StatusStep } from "./types";
 type Screen = "dashboard" | "goal" | "status" | "receipt";
 
 const SEED_DEALS: DealSummary[] = [
-  { dealId: "demo-1", counterpartyName: "translate-agent.sui", amount: 8, status: "released" },
+  {
+    dealId: "demo-1",
+    counterpartyName: "translate-agent.sui",
+    amount: 8,
+    status: "released",
+    category: "Translation",
+    description: "Translated onboarding docs into Spanish and French.",
+  },
+  {
+    dealId: "demo-2",
+    counterpartyName: "legal-review.sui",
+    amount: 12,
+    status: "escrowed",
+    category: "Legal",
+    description: "Reviewing a vendor contract for indemnity clauses.",
+  },
+  {
+    dealId: "demo-3",
+    counterpartyName: "courier-dispatch.sui",
+    amount: 4,
+    status: "released",
+    category: "Logistics",
+    description: "Same-day courier quote and pickup scheduling.",
+  },
 ];
 
 function ScreenTransition({ children }: { children: React.ReactNode }) {
@@ -42,7 +66,9 @@ export function App() {
   const [screen, setScreen] = useState<Screen>("dashboard");
   const [deals, setDeals] = useState<DealSummary[]>(SEED_DEALS);
   const [steps, setSteps] = useState<StatusStep[]>([]);
-  const [currentGoal, setCurrentGoal] = useState<{ counterpartyName?: string } | null>(null);
+  const [currentGoal, setCurrentGoal] = useState<{ counterpartyName?: string; description?: string } | null>(
+    null,
+  );
   const [receipt, setReceipt] = useState<DealReceipt | null>(null);
 
   function handleLogin() {
@@ -57,7 +83,7 @@ export function App() {
 
   function handleGoalSubmit(goal: string) {
     setScreen("status");
-    setCurrentGoal({});
+    setCurrentGoal({ description: goal });
     // DEMO-ONLY: drives the status feed with a scripted sequence on
     // placeholder data — see demoStatusSequence.ts for what must replace
     // this once Person 1/2/3's real integration points land.
@@ -65,8 +91,10 @@ export function App() {
       onStepsChange: (nextSteps) => {
         setSteps(nextSteps);
         const found = nextSteps.find((s) => s.id === "candidate-found");
-        if (found?.detail && typeof found.detail === "object" && "suinsName" in found.detail) {
-          setCurrentGoal({ counterpartyName: found.detail.suinsName });
+        const candidateDetail = found?.detail;
+        if (candidateDetail && typeof candidateDetail === "object" && "suinsName" in candidateDetail) {
+          const suinsName = candidateDetail.suinsName;
+          setCurrentGoal((prev) => ({ ...prev, counterpartyName: suinsName }));
         }
       },
       onComplete: (finalReceipt) => {
@@ -84,6 +112,12 @@ export function App() {
           counterpartyName: receipt.counterpartyName,
           amount: receipt.amount,
           status: "released",
+          // PROPOSED: category/description shown on the deal card don't
+          // yet have a real on-chain source — see /docs/ARCHITECTURE.md's
+          // Mandate.allowed_categories field for where "category" should
+          // eventually come from. Falling back to the raw goal text here.
+          category: "General",
+          description: currentGoal?.description ?? "",
         },
         ...prev,
       ]);
@@ -95,22 +129,7 @@ export function App() {
   }
 
   if (!authenticated) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-ink px-6 text-center text-vellum">
-        <span className="font-display text-2xl font-semibold tracking-[0.15em]">WARRANT</span>
-        <p className="mt-2 text-sm text-manifest">On-chain trust and settlement for AI agents.</p>
-        <button
-          type="button"
-          onClick={handleLogin}
-          className="mt-8 rounded border border-brass/50 px-5 py-2.5 text-sm font-medium text-vellum transition-colors hover:border-brass hover:bg-brass/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
-        >
-          Continue with Google
-        </button>
-        <p className="mt-3 text-xs text-manifest">
-          Signs you in via zkLogin — no seed phrase, no extension required.
-        </p>
-      </div>
-    );
+    return <Landing onSignIn={handleLogin} />;
   }
 
   return (
