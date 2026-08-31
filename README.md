@@ -101,8 +101,8 @@ VITE_SUI_NETWORK=testnet                # VERIFY: exact expected values
 
 # Deployed 2026-08-31 to Sui testnet by Person 1. These two are REAL values,
 # not placeholders — copy them as-is. See "Deployed addresses" below.
-VITE_CUSTODIA_PACKAGE_ID=0x5cefd0ccd473d716c57049148447a07d0fc05c6ca347ff5e6abc3c8cb9635b19
-VITE_AGENT_REGISTRY_ID=0x1c088f0a3cf616771bbc078c17a99f626f6e3a9b006df52cb6c6621999919b7b
+VITE_CUSTODIA_PACKAGE_ID=0x881df0e7497084148538356c075a4d9e3640fac30afea1e2328aba28b33b8f71
+VITE_AGENT_REGISTRY_ID=0xf42821c47c23e96967bdc04b4265f38f7c92697bb966204205aff3a7d8e214e4
 
 VITE_ENOKI_API_KEY=                     # VERIFY: exact env var name in Enoki docs
 VITE_WALRUS_PUBLISHER_URL=              # VERIFY: exact env var name / current publisher URL in Walrus docs
@@ -113,18 +113,17 @@ VITE_NAUTILUS_ENDPOINT=                 # VERIFY: exact env var name in Nautilus
 
 ## Deployed addresses (Sui testnet)
 
-Published 2026-08-31 (after adding SuiNS name verification; supersedes the rename-only publish `0xe44db9da…`, itself after the Custodia rename — the package name is part of every on-chain type string, so renaming forced a fresh package. `0x8e50044a…` and `0xa916af…` are both dead). Chain ID `4c78adac`. Also recorded in
+Published 2026-08-31 (after implementing the Seal deal_access policy and SuiNS name verification; supersedes the rename-only publish `0xe44db9da…`, itself after the Custodia rename — the package name is part of every on-chain type string, so renaming forced a fresh package. `0x8e50044a…` and `0xa916af…` are both dead). Chain ID `4c78adac`. Also recorded in
 `move/Published.toml`, which the toolchain reads — do not hand-edit it.
 
 | What | Value |
 |---|---|
-| Package ID | `0x5cefd0ccd473d716c57049148447a07d0fc05c6ca347ff5e6abc3c8cb9635b19` |
-| `AgentRegistry` (shared) | `0x1c088f0a3cf616771bbc078c17a99f626f6e3a9b006df52cb6c6621999919b7b` |
-| `UpgradeCap` | `0x51f6468251e912cf64fe3739a39f773e2c3584f2416d8d7625fd3aaeb976e832` |
-| **Upgrade authority** (holds the cap) | `0x02ceac8c4e5bdb8b903974125f4c9fbe08fb458436e1d5ba23ead03745e28ef5` — Person 1's wallet |
+| Package ID | `0x881df0e7497084148538356c075a4d9e3640fac30afea1e2328aba28b33b8f71` |
+| `AgentRegistry` (shared) | `0xf42821c47c23e96967bdc04b4265f38f7c92697bb966204205aff3a7d8e214e4` |
+| `UpgradeCap` | `0x0e28f571116349e281b2f0b3007d4084696fbfcf9d6133122e9ba83247623ec8` |
+| **Upgrade authority** (holds the cap) | `0x65547073f0f184ad64ad8146125f76d81de9b42ec3a9c2b551a7163eddf976f1` — CLI keystore (this publish; move to the wallet at the final build) |
 | Publisher (historical only) | `0x65547073f0f184ad64ad8146125f76d81de9b42ec3a9c2b551a7163eddf976f1` — CLI keystore |
-| Publish transaction | `F1cVzHeAVuTirPqaZLrAUvmb2BieZopHvrwAU9aRrMHN` |
-| `UpgradeCap` transfer | `D22cXT19AdKsbXRWEJZgzQV2jX8rxZjiXcXtdvYUkRUa` |
+| Publish transaction | `BAXxG4aGpyGdyFQQNAvx7ZpGMErFcHXAK2DpJzeEEK6Q` |
 
 The package was published from the CLI keystore address, then the `UpgradeCap`
 was transferred to Person 1's wallet. The publisher address is recorded in
@@ -138,8 +137,9 @@ branch, not a pinned tag — a later `sui move build` could pull a different
 suins and would need re-verifying). It publishes only where SuiNS is deployed,
 so testnet works and localnet would not without SuiNS present.
 
-Note `deal_access` is published but inert — `seal_approve` and `check_policy`
-are still TODOs, so the Seal policy is not enforceable yet.
+`deal_access` now implements the Seal allowlist policy (`seal_approve` +
+`check_policy`), verified against Seal's whitelist reference pattern. Person 3
+still owns the step-4-vs-step-6 keying design gap noted in the module.
 
 **If the package is ever upgraded**, keep BOTH IDs: struct types stay anchored
 to the original package ID, so type-based queries must use the original while

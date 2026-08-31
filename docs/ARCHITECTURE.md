@@ -360,7 +360,8 @@ canonical list or the first real PTB #1 aborts with `ECategoryNotAllowed`.
   name for the exact-string match to pass. Reputation is still Sybil-vulnerable
   because one human can hold several names — this is a strong speed bump, not a
   full solution.
-- `deal_access::seal_approve` is still a TODO and is Person 3's call.
+- `deal_access::seal_approve` is IMPLEMENTED (Seal whitelist pattern, verified
+  against source). The remaining step-4-vs-step-6 keying gap is Person 3's.
 - Whoever holds the `UpgradeCap` can publish a new in-package function that
   drains escrow. `only_additive_upgrades` at publish would prevent that, at the
   cost of never being able to fix the existing modules. Not set — decide before
