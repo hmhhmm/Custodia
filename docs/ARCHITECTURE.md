@@ -37,6 +37,9 @@ escrow.
 ## Core Move objects
 
 These four objects are fixed for this hackathon (per /CLAUDE.md rule 5).
+Fields marked **ADDED 2026-08-31** were changed in the security hardening
+round and are flagged here rather than landed silently — they forced the
+republish, and they are the reason the old package ID is dead.
 Do not rename fields or add new ones without flagging the change to the
 whole team — anything marked PROPOSED below still needs confirmation from
 Person 1 before other people's code depends on it.
@@ -65,6 +68,7 @@ Person 1 before other people's code depends on it.
 | max_spend | u64 | |
 | spent_so_far | u64 | |
 | allowed_categories | vector\<String\> | |
+| funds | Balance\<SUI\> | **ADDED 2026-08-31 (rule 5 change).** The custodied principal. The Mandate previously held no funds, so the cap constrained a channel rather than an agent. `max_spend` is AUTHORISATION, `funds` is CUSTODY; the effective limit is `spendable() = min(remaining, funds)` |
 | expires_at | u64 | RESOLVED — epoch MILLISECONDS, compared against `sui::clock::Clock.timestamp_ms()`. Chosen over an epoch number because a mandate window is sub-epoch and `ctx.epoch_timestamp_ms()` only returns the epoch start. Person 4: `MandateSnapshot.expiresAt` needs a ms conversion |
 | revoked | bool | |
 
@@ -74,8 +78,12 @@ Person 1 before other people's code depends on it.
 | client_agent | ID | |
 | specialist_agent | ID | |
 | escrowed_amount | Balance\<SUI\> | |
-| status | enum: Negotiating, Escrowed, Delivered, Verified, Released, Disputed | |
-| proof_ref | Option\<ID\> | Points at a Walrus/Nautilus-backed verification record. PROPOSED concrete shape in `frontend/src/verification/proof.ts` — confirm with Person 1 |
+| status | enum: Negotiating, Escrowed, **Accepted**, Delivered, Verified, Released, Disputed, **Refunded**, **Settled** | **THREE VARIANTS ADDED 2026-08-31.** `status_rank` renumbered: Released 4→5, Disputed 5→6, plus 7 Refunded and 8 Settled |
+| proof_ref | Option\<ID\> | Points at an `escrow::proof::DealProof`, which is now a real object bound to this deal and its specialist — no longer an unvalidated ID |
+| funding_mandate | ID | **ADDED (rule 5 change).** The Mandate this deal drew from. Refunds must return to it, or a refunded deal permanently burns the human's budget and an attacker could refund into their own Mandate |
+| arbiter | Option\<address\> | **ADDED (rule 5 change).** Optional referee, named by the client and ratified by the specialist's `accept`. Can only split this deal between these parties, and cannot stall |
+| review_window_ms | u64 | **ADDED (rule 5 change).** Agreed at creation, applied at delivery |
+| stage_deadline_ms | u64 | **ADDED (rule 5 change).** One field, three clocks, disambiguated by `status`: delivery deadline while Escrowed/Accepted, review deadline while Delivered, dispute deadline while Disputed |
 
 ## End-to-end sequence
 
