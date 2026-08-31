@@ -98,12 +98,39 @@ must not be used in `frontend/src/`:
 
 ```
 VITE_SUI_NETWORK=testnet                # VERIFY: exact expected values
+
+# Deployed 2026-08-31 to Sui testnet by Person 1. These two are REAL values,
+# not placeholders — copy them as-is. See "Deployed addresses" below.
+VITE_ESCROW_PACKAGE_ID=0x8e50044a1b87d3f727985f593c7ac1967261f7ea52bdcda9ec6c25a2f35a8720
+VITE_AGENT_REGISTRY_ID=0x5f02aca49f1ce8cdea962fefcf8d02089b733bf2344c0a0737bd533d4eb4d370
+
 VITE_ENOKI_API_KEY=                     # VERIFY: exact env var name in Enoki docs
 VITE_WALRUS_PUBLISHER_URL=              # VERIFY: exact env var name / current publisher URL in Walrus docs
 VITE_WALRUS_AGGREGATOR_URL=             # VERIFY: exact env var name / current aggregator URL in Walrus docs
 VITE_SEAL_KEY_SERVER_URL=               # VERIFY: exact env var name in Seal docs
 VITE_NAUTILUS_ENDPOINT=                 # VERIFY: exact env var name in Nautilus docs (only relevant once/if real Nautilus is attempted — see docs/ARCHITECTURE.md)
 ```
+
+## Deployed addresses (Sui testnet)
+
+Published 2026-08-31. Chain ID `4c78adac`. Also recorded in
+`move/Published.toml`, which the toolchain reads — do not hand-edit it.
+
+| What | Value |
+|---|---|
+| Package ID | `0x8e50044a1b87d3f727985f593c7ac1967261f7ea52bdcda9ec6c25a2f35a8720` |
+| `AgentRegistry` (shared) | `0x5f02aca49f1ce8cdea962fefcf8d02089b733bf2344c0a0737bd533d4eb4d370` |
+| `UpgradeCap` | `0x8e6f26e881832b61e58902fd3ad6f87c8f2b5ef2cc90ba87faeeb9eb1e959451` |
+| Publisher / upgrade authority | `0x65547073f0f184ad64ad8146125f76d81de9b42ec3a9c2b551a7163eddf976f1` |
+| Publish transaction | `4y6vEv1iq4yDm5af6A6ADpDdUX5LpdfiVZP854PTLKyP` |
+
+Modules: `agent_identity`, `deal`, `deal_access`, `mandate`, `reputation`.
+Note `deal_access` is published but inert — `seal_approve` and `check_policy`
+are still TODOs, so the Seal policy is not enforceable yet.
+
+**If the package is ever upgraded**, keep BOTH IDs: struct types stay anchored
+to the original package ID, so type-based queries must use the original while
+`moveCall` targets use the newest. Today they are the same value.
 
 ## Team & task ownership
 
