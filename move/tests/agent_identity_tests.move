@@ -9,7 +9,10 @@ module custodia::agent_identity_tests;
 
 use std::string::String;
 use std::unit_test::{assert_eq, destroy};
+use sui::clock;
 use sui::test_scenario::{Self, Scenario};
+use suins::domain;
+use suins::suins_registration;
 use custodia::agent_identity::{Self, AgentIdentity, AgentRegistry};
 use custodia::reputation::{Self, Reputation};
 
@@ -330,6 +333,112 @@ fun a_new_agent_is_never_marked_name_verified() {
     let agents = registry.agents();
     assert!(!agents[0].summary_name_verified());
 
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
+
+#[test]
+fun a_matching_suins_registration_verifies_the_name() {
+    // Possession of the SuinsRegistration IS the proof: it is address-owned, so
+    // the test's sender can only pass it in because it holds it.
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    let (identity, rep) = agent_identity::register(
+        &mut registry,
+        b"lawyer.sui".to_string(),
+        legal_caps(),
+        scenario.ctx(),
+    );
+
+    let mut c = clock::create_for_testing(scenario.ctx());
+    c.set_for_testing(1_000);
+    let reg = suins_registration::new_for_testing(
+        domain::new(b"lawyer.sui".to_string()),
+        1,
+        &c,
+        scenario.ctx(),
+    );
+
+    identity.verify_name(&mut registry, &reg, &c, scenario.ctx());
+
+    let agents = registry.agents();
+    assert!(agents[0].summary_name_verified());
+
+    destroy(identity);
+    destroy(rep);
+    destroy(reg);
+    destroy(c);
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = agent_identity::ENameMismatch, location = agent_identity)]
+fun a_registration_for_a_different_name_does_not_verify() {
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    let (identity, rep) = agent_identity::register(
+        &mut registry,
+        b"lawyer.sui".to_string(),
+        legal_caps(),
+        scenario.ctx(),
+    );
+
+    let mut c = clock::create_for_testing(scenario.ctx());
+    c.set_for_testing(1_000);
+    // Holds a genuine registration, but for someone else's name.
+    let reg = suins_registration::new_for_testing(
+        domain::new(b"attacker.sui".to_string()),
+        1,
+        &c,
+        scenario.ctx(),
+    );
+
+    identity.verify_name(&mut registry, &reg, &c, scenario.ctx());
+
+    destroy(identity);
+    destroy(rep);
+    destroy(reg);
+    destroy(c);
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = agent_identity::ENotOwner, location = agent_identity)]
+fun a_non_owner_cannot_verify_a_name() {
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    let (identity, rep) = agent_identity::register(
+        &mut registry,
+        b"lawyer.sui".to_string(),
+        legal_caps(),
+        scenario.ctx(),
+    );
+
+    let mut c = clock::create_for_testing(scenario.ctx());
+    c.set_for_testing(1_000);
+
+    scenario.next_tx(STRANGER);
+    let reg = suins_registration::new_for_testing(
+        domain::new(b"lawyer.sui".to_string()),
+        1,
+        &c,
+        scenario.ctx(),
+    );
+    identity.verify_name(&mut registry, &reg, &c, scenario.ctx());
+
+    destroy(identity);
+    destroy(rep);
+    destroy(reg);
+    destroy(c);
     test_scenario::return_shared(registry);
     scenario.end();
 }

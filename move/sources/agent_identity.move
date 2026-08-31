@@ -12,7 +12,9 @@ module custodia::agent_identity;
 
 use std::string::String;
 use sui::address;
+use sui::clock::Clock;
 use sui::event;
+use suins::suins_registration::SuinsRegistration;
 use custodia::reputation::{Self, Reputation};
 
 #[error]
@@ -29,6 +31,12 @@ const ENameTooLong: vector<u8> = b"SuiNS name exceeds the permitted length";
 
 #[error]
 const ETooManyCapabilities: vector<u8> = b"Too many capabilities, or a capability is too long";
+
+#[error]
+const ENameMismatch: vector<u8> = b"SuiNS registration does not match this identity's name";
+
+#[error]
+const ENameExpired: vector<u8> = b"SuiNS registration has expired";
 
 /// Hard cap on registered agents. `agents` is an unbounded vector inside a
 /// shared object, and Sui caps objects at 256 KB. Without a cap, registration
@@ -118,6 +126,11 @@ public struct AgentRegistered has copy, drop {
 public struct CapabilitiesUpdated has copy, drop {
     agent_id: ID,
     capabilities: vector<String>,
+}
+
+public struct NameVerified has copy, drop {
+    agent_id: ID,
+    suins_name: String,
 }
 
 fun init(ctx: &mut TxContext) {
@@ -238,6 +251,53 @@ public fun transfer_ownership(
     });
 
     transfer::transfer(identity, new_owner);
+}
+
+/// Owner-only. Proves the sender controls `identity.suins_name` and flips the
+/// registry's `name_verified` flag from its permanent `false` to `true`.
+///
+/// The proof is possession itself. `SuinsRegistration` is the capability object
+/// SuiNS mints to a domain's controller, and it is address-owned — a
+/// transaction can only pass it in if the sender holds it. So the transaction
+/// succeeding IS current control; no resolver lookup is needed, and this does
+/// not use the NFT as a *resolution* method (which the SuiNS docs warn against),
+/// only as the ownership capability it is.
+///
+/// The API was verified against the suins-contracts source this session, per
+/// /CLAUDE.md rule 1: `suins::suins_registration::SuinsRegistration` with
+/// `domain_name(): String` and `expiration_timestamp_ms(): u64`.
+///
+/// Normalisation requirement, worth stating because it is the one sharp edge:
+/// `domain_name()` returns the full SuiNS name (e.g. "alice.sui"), so an agent
+/// gets verified only if it registered its `suins_name` as exactly that string.
+/// Person 4's registration UI should store the full ".sui" name, not a bare
+/// label. This is a coordination point with Person 2, who owns SuiNS
+/// registration — the Move check is Person 1's, the name it checks against is
+/// set at registration time.
+///
+/// A byte-string equality, not SuiNS's own normalisation. If a name has a
+/// canonical form that differs from what was stored, this rejects it — correct
+/// and safe (it never wrongly verifies), just occasionally stricter than
+/// necessary.
+public fun verify_name(
+    identity: &AgentIdentity,
+    registry: &mut AgentRegistry,
+    registration: &SuinsRegistration,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
+    assert!(ctx.sender() == identity.owner, ENotOwner);
+    assert!(registration.domain_name() == identity.suins_name, ENameMismatch);
+    assert!(clock.timestamp_ms() < registration.expiration_timestamp_ms(), ENameExpired);
+
+    let agent_id = object::id(identity);
+    registry.agents.do_mut!(|summary| {
+        if (summary.agent_id == agent_id) {
+            summary.name_verified = true;
+        }
+    });
+
+    event::emit(NameVerified { agent_id, suins_name: identity.suins_name });
 }
 
 /// Owner-only. Updates the identity and its registry summary together, so

@@ -2,16 +2,12 @@
 name = "custodia"
 edition = "2024"
 
-# No [dependencies] block: the Sui framework and MoveStdlib are resolved
-# automatically by Sui CLI v1.63+. Adding an explicit
-#   Sui = { git = "https://github.com/MystenLabs/sui.git", ... }
-# entry is what produces the "Dependency 'Sui' is a legacy system name"
-# build error — verified against the installed `sui-move-project` skill.
-#
-# No [addresses] block either: the old `custodia = "0x0"` form is superseded.
-# The published address is tracked in Published.toml, which the toolchain
-# creates on first `sui client publish`.
-#
-# Add an [environments] section only if a build actually fails with
-# "Could not determine the correct dependencies" — it maps environment
-# names to chain IDs and is only needed for multi-network deploys.
+# SuiNS core, added 2026-08-31 for `agent_identity::verify_name`. The type
+# SuinsRegistration and its `domain_name()` getter were verified against the
+# suins-contracts source this session (rule 1), not assumed.
+[dependencies]
+suins = { git = "https://github.com/mystenlabs/suins-contracts.git", subdir = "packages/suins", rev = "releases/mainnet/core/v3" }
+
+# No explicit Sui/MoveStdlib entry: the framework is resolved automatically by
+# Sui CLI v1.63+, and suins pulls the same framework transitively. Adding an
+# explicit Sui git dep is what produces the "legacy system name" error.
