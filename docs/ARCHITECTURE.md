@@ -255,46 +255,100 @@ project, not a follow-up SDK task.
 | 3 — Verification/storage | `/frontend/src/verification/` (or a dedicated services package — propose if a separate Node service is cleaner) — Walrus, Seal, Nautilus attestation flow | Person 1 (what proof_ref should point at), Person 2 (how proof_ref gets written into PTB #2) |
 | 4 — Frontend + orchestration | `/frontend/src/app/` (UI) and `/frontend/src/agent/` (LLM calls, discovery/matching, scripted specialist stand-ins) | Person 2 (transaction request shape), Person 3 (what proof data looks like once available) |
 
-**RESOLVED — the Move side is built and its signatures are final:**
+**RESOLVED — the Move side is built, hardened, and REPUBLISHED 2026-08-31.**
 
-- `escrow::deal::create_and_lock_escrow(&mut Mandate, &AgentRegistry,
-  &AgentIdentity /* client */, Coin<SUI>, ID /* specialist_agent */, String
-  /* category */, &Clock, &mut TxContext) -> Deal`
-- `escrow::deal::mark_delivered(&mut Deal, &AgentIdentity /* specialist */,
-  ID /* proof_ref */, &TxContext)` — a SEPARATE transaction signed by the
-  specialist, not part of either PTB.
-- `escrow::deal::verify_and_release(&mut Deal, &AgentIdentity /* client */,
-  &mut Reputation /* client */, &mut Reputation /* specialist */,
-  &mut TxContext) -> Coin<SUI>` — **client-signed only.**
-- `escrow::mandate::assert_within_mandate(&Mandate, u64, String, &Clock)`
+⚠️ **BREAKING for Person 2 and Person 4.** The second publish changed
+signatures, added `Deal` and `Mandate` fields, and renumbered `status_rank`.
+The old package `0x8e50044a…` is superseded; do not point at it.
+
+Core flow, in order:
+
+- `deal::create_and_lock_escrow(&mut Mandate, &AgentRegistry, &AgentIdentity
+  /* client */, ID /* specialist_agent */, String /* category */, u64 /* amount
+  */, u64 /* delivery_window_ms */, u64 /* review_window_ms */,
+  Option<address> /* arbiter */, &Clock, &mut TxContext) -> Deal`
+- `deal::accept(&mut Deal, &AgentIdentity /* specialist */, Option<address>,
+  u64 /* expected deadline */, u64 /* expected amount */, &Clock, &TxContext)`
+  — **NEW and required.** A deal cannot be delivered until the specialist
+  accepts.
+- `deal::mark_delivered(&mut Deal, &AgentIdentity /* specialist */,
+  &DealProof, &Clock, &TxContext)` — takes a real proof OBJECT now, not a
+  bare `ID`. Build it with `escrow::proof::new_simulated(...)` and consume it
+  with `escrow::proof::share_proof(...)`.
+- `deal::verify_and_release(&mut Deal, &AgentRegistry, &AgentIdentity
+  /* client */, &mut Reputation, &mut Reputation, &mut TxContext)` —
+  **client-signed, and RETURNS NOTHING.** It pays the specialist's
+  registry-resolved owner directly. `buildVerifyAndReleaseTx` no longer needs
+  a recipient argument, and must not expect a coin back.
+- `mandate::assert_within_mandate(&Mandate, u64, String, &Clock)` — unchanged.
+
+Unilateral exits (every one of these is new; they are what make this an
+escrow rather than a mutual-cooperation lock):
+
+- `deal::withdraw_offer` — client cancels a deal the specialist never accepted.
+- `deal::claim_refund` — **permissionless** after the delivery deadline;
+  returns escrow to the funding Mandate.
+- `deal::claim_release` — **permissionless** after the review deadline; pays
+  the specialist when the client goes silent.
+- `deal::raise_dispute` — **client-only, and only from Delivered.**
+- `deal::concede_refund` / `deal::resolve_dispute` / `deal::settle_default`.
+
+**Mandate now CUSTODIES the funds.** `create_and_lock_escrow` no longer takes a
+`Coin<SUI>` — it draws from the Mandate. The human must `deposit` first, or use
+`mandate::create_funded_and_share`. **A Mandate may no longer delegate to its
+own owner**, so the demo needs a separate agent address for the delegate.
+
+**`status_rank` numbers CHANGED** — `Accepted` was inserted at 2, so Released
+is now 5 (was 4) and Disputed is 6 (was 5). New: 7 Refunded, 8 Settled. This
+silently breaks any status badge built against the old numbers.
 
 **Notes for Person 2 before building the PTBs:**
 
 - Use the `entry` wrappers — `deal::create_and_share`,
-  `mandate::create_and_share`, `agent_identity::register_and_keep` — or call
-  the returning constructor and consume its value with the matching public
+  `mandate::create_funded_and_share`, `agent_identity::register_and_keep` — or
+  call the returning constructor and consume its value with the matching public
   `share`. `Deal`, `Mandate` and `Reputation` are `key` without `store`, so a
   PTB cannot dispose of them any other way and the transaction will fail with
   `UnusedValueWithoutDrop`.
 - `create_and_share` returns nothing, so read the new Deal's ID from the
   `DealCreated` event rather than a PTB result.
-- Both create paths need the `Clock` at `0x6` and a `category` string.
-- `verify_and_release` returns the payout `Coin<SUI>`; the PTB chooses the
-  recipient, so `buildVerifyAndReleaseTx` needs a specialist address argument.
+- Every create/settle path needs the `Clock` at `0x6`.
 - The demo needs a SECOND funded address holding the specialist's
-  `AgentIdentity`, because `mark_delivered` requires its owner's signature.
-  Nobody currently owns this.
+  `AgentIdentity`, because `accept` and `mark_delivered` both require its
+  owner's signature. Nobody currently owns this.
 
-**Registry — decided, built, and shared.** `escrow::agent_identity::init`
-creates and shares exactly one `AgentRegistry`. Person 4's discovery reads it
-via `agents()`, which returns `vector<AgentSummary>` — note `AgentSummary`
-carries `reputation_id`, not the score itself, so ranking needs a second fetch
-per agent. Registration enforces unique SuiNS names and a 256-agent cap.
+**Notes for Person 4:**
+
+- `AgentSummary` gained `name_verified`, which is ALWAYS false today. Render an
+  "unverified" badge — `suins_name` is a self-asserted label, not proof of
+  SuiNS ownership.
+- `DealCreated` carries `category` and `amount`; `DealReleased` carries
+  `paid_to` and `by_timeout`; `DealSettled` carries the split and
+  `resolved_by` (none = timeout default). These events are the only source for
+  receipt data once a deal settles.
+- Reputation scores moved: one completed deal is now 58, not 100.
+
+**Registry — decided, built, and shared.** `agent_identity::init` creates and
+shares exactly one `AgentRegistry`. Registration enforces unique SuiNS names, a
+256-agent cap, and byte caps on names and capabilities.
 
 **Category strings are an exact, case-sensitive match** in
 `assert_within_mandate`. The Move tests use `"legal-review"` while the UI uses
 `["legal", "logistics"]` and `"Legal"`. These must be reconciled into one
 canonical list or the first real PTB #1 aborts with `ECategoryNotAllowed`.
+
+**Known limitations, stated rather than hidden:**
+
+- Reputation is **Sybil-vulnerable**: addresses are free, so a human with two
+  funded addresses can wash-trade a score for gas. The distinct-owner check is a
+  speed bump. The real fix is an external identity anchor (SuiNS ownership).
+- `suins_name` ownership is **unproven** — no installed skill covers SuiNS, so
+  per CLAUDE.md rule 1 nothing was invented.
+- `deal_access::seal_approve` is still a TODO and is Person 3's call.
+- Whoever holds the `UpgradeCap` can publish a new in-package function that
+  drains escrow. `only_additive_upgrades` at publish would prevent that, at the
+  cost of never being able to fix the existing modules. Not set — decide before
+  any mainnet consideration.
 
 **Still genuinely TBD:**
 - Package ID and the `AgentRegistry` object ID — filled in at deployment.

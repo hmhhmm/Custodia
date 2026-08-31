@@ -101,8 +101,8 @@ VITE_SUI_NETWORK=testnet                # VERIFY: exact expected values
 
 # Deployed 2026-08-31 to Sui testnet by Person 1. These two are REAL values,
 # not placeholders — copy them as-is. See "Deployed addresses" below.
-VITE_ESCROW_PACKAGE_ID=0x8e50044a1b87d3f727985f593c7ac1967261f7ea52bdcda9ec6c25a2f35a8720
-VITE_AGENT_REGISTRY_ID=0x5f02aca49f1ce8cdea962fefcf8d02089b733bf2344c0a0737bd533d4eb4d370
+VITE_ESCROW_PACKAGE_ID=0xa916afaeecee2143f539e680e1feb50e991968c305d690c5109e7dc87ed8425e
+VITE_AGENT_REGISTRY_ID=0xc7782a5150889033fb4d7f3efb801b7fd38a0370c9f16e56003654040215ecb5
 
 VITE_ENOKI_API_KEY=                     # VERIFY: exact env var name in Enoki docs
 VITE_WALRUS_PUBLISHER_URL=              # VERIFY: exact env var name / current publisher URL in Walrus docs
@@ -113,18 +113,18 @@ VITE_NAUTILUS_ENDPOINT=                 # VERIFY: exact env var name in Nautilus
 
 ## Deployed addresses (Sui testnet)
 
-Published 2026-08-31. Chain ID `4c78adac`. Also recorded in
+Published 2026-08-31 (second publish — the first, `0x8e50044a…`, is superseded and must not be used). Chain ID `4c78adac`. Also recorded in
 `move/Published.toml`, which the toolchain reads — do not hand-edit it.
 
 | What | Value |
 |---|---|
-| Package ID | `0x8e50044a1b87d3f727985f593c7ac1967261f7ea52bdcda9ec6c25a2f35a8720` |
-| `AgentRegistry` (shared) | `0x5f02aca49f1ce8cdea962fefcf8d02089b733bf2344c0a0737bd533d4eb4d370` |
-| `UpgradeCap` | `0x8e6f26e881832b61e58902fd3ad6f87c8f2b5ef2cc90ba87faeeb9eb1e959451` |
+| Package ID | `0xa916afaeecee2143f539e680e1feb50e991968c305d690c5109e7dc87ed8425e` |
+| `AgentRegistry` (shared) | `0xc7782a5150889033fb4d7f3efb801b7fd38a0370c9f16e56003654040215ecb5` |
+| `UpgradeCap` | `0x3f01d366f3a882a1e0e1fded8e281653558809140f2a9c58064b9ef1cebc60d2` |
 | **Upgrade authority** (holds the cap) | `0x02ceac8c4e5bdb8b903974125f4c9fbe08fb458436e1d5ba23ead03745e28ef5` — Person 1's wallet |
 | Publisher (historical only) | `0x65547073f0f184ad64ad8146125f76d81de9b42ec3a9c2b551a7163eddf976f1` — CLI keystore |
-| Publish transaction | `4y6vEv1iq4yDm5af6A6ADpDdUX5LpdfiVZP854PTLKyP` |
-| `UpgradeCap` transfer | `9UgyRCud2j8QPgUan5t5cfS3JyBaZVmXKQbmpWa2PKev` |
+| Publish transaction | `2NXdHyvN7HxHpHViuVUCw9w35SiahL685xBadqfKUFiU` |
+| `UpgradeCap` transfer | `7vDnweihVQJwZePH89Kzk7DaVSENjBgz3QHoMP9wuRBE` |
 
 The package was published from the CLI keystore address, then the `UpgradeCap`
 was transferred to Person 1's wallet. The publisher address is recorded in
@@ -132,7 +132,7 @@ transaction history and cannot change, but it carries no ongoing authority —
 **whoever holds the `UpgradeCap` is the only party who can upgrade this
 package.** Upgrades must be signed by the wallet, not the CLI.
 
-Modules: `agent_identity`, `deal`, `deal_access`, `mandate`, `reputation`.
+Modules: `agent_identity`, `deal`, `deal_access`, `mandate`, `proof`, `reputation`.
 Note `deal_access` is published but inert — `seal_approve` and `check_policy`
 are still TODOs, so the Seal policy is not enforceable yet.
 
