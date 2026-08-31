@@ -11,6 +11,7 @@
 module escrow::agent_identity;
 
 use std::string::String;
+use sui::address;
 use sui::event;
 use escrow::reputation::{Self, Reputation};
 
@@ -23,6 +24,12 @@ const ENameTaken: vector<u8> = b"An agent is already registered under this SuiNS
 #[error]
 const ERegistryFull: vector<u8> = b"Agent registry is at capacity";
 
+#[error]
+const ENameTooLong: vector<u8> = b"SuiNS name exceeds the permitted length";
+
+#[error]
+const ETooManyCapabilities: vector<u8> = b"Too many capabilities, or a capability is too long";
+
 /// Hard cap on registered agents. `agents` is an unbounded vector inside a
 /// shared object, and Sui caps objects at 256 KB. Without a cap, registration
 /// is permissionless and there is no removal function, so a spammer could push
@@ -34,6 +41,19 @@ const ERegistryFull: vector<u8> = b"Agent registry is at capacity";
 /// abort. It does not fix the underlying design; the roadmap answer is still to
 /// consume `AgentRegistered` events off-chain and drop the vector entirely.
 const MAX_REGISTRY_AGENTS: u64 = 256;
+
+/// Byte caps on everything a caller writes into the shared registry.
+///
+/// The agent cap alone bounds the wrong dimension. `AgentSummary` carries an
+/// unbounded `String` and an unbounded `vector<String>`, and
+/// `update_capabilities` lets an already-registered agent grow its entry after
+/// the fact with no limit at all — so the registry could be pushed past the
+/// object-size ceiling at far fewer than 256 agents, permanently killing
+/// onboarding. Bounding bytes is what actually holds the invariant; bounding
+/// count only looked like it did.
+const MAX_NAME_BYTES: u64 = 64;
+const MAX_CAPABILITIES: u64 = 16;
+const MAX_CAPABILITY_BYTES: u64 = 48;
 
 public struct AgentIdentity has key, store {
     id: UID,
@@ -52,6 +72,25 @@ public struct AgentSummary has store, copy, drop {
     suins_name: String,
     capabilities: vector<String>,
     reputation_id: ID,
+    /// Always `false` today, and deliberately so.
+    ///
+    /// `suins_name` is a first-come-unique, SELF-ASSERTED label. Nothing here
+    /// proves the registrant controls that SuiNS name. Uniqueness blocks the
+    /// cheapest impersonation — registering a known agent's exact name and
+    /// being indistinguishable in discovery — but it is not ownership, and it
+    /// cuts the other way too: first-come-first-served with no deregistration
+    /// means a squatter holds a name irrecoverably.
+    ///
+    /// Person 4's discovery MUST render an "unverified" badge while this is
+    /// false, so the UI never presents a self-asserted label as an identity
+    /// claim. The field exists now because struct fields freeze at publish and
+    /// adding it later would cost another breaking republish.
+    ///
+    /// VERIFY before writing any code that sets this true: no installed skill
+    /// covers SuiNS, so the registration NFT's exact type, module path, and
+    /// domain accessor are all unverified. Do not guess them.
+    /// See https://docs.sui.io/standards/suins
+    name_verified: bool,
 }
 
 /// Shared registry of all agents. Created and shared once, in `init`.
@@ -114,6 +153,8 @@ public fun register(
 ): (AgentIdentity, Reputation) {
     assert!(registry.agents.length() < MAX_REGISTRY_AGENTS, ERegistryFull);
     assert!(!registry.is_name_taken(suins_name), ENameTaken);
+    assert_name_within_limits(&suins_name);
+    assert_capabilities_within_limits(&capabilities);
 
     let id = object::new(ctx);
     let agent_id = id.to_inner();
@@ -135,6 +176,7 @@ public fun register(
         suins_name: identity.suins_name,
         capabilities: identity.capabilities,
         reputation_id,
+        name_verified: false,
     });
 
     event::emit(AgentRegistered {
@@ -207,6 +249,9 @@ public fun update_capabilities(
     ctx: &TxContext,
 ) {
     assert!(ctx.sender() == identity.owner, ENotOwner);
+    // Without this, an already-registered agent could grow its registry entry
+    // without limit and brick the shared object even under the agent cap.
+    assert_capabilities_within_limits(&capabilities);
 
     identity.capabilities = capabilities;
     let agent_id = object::id(identity);
@@ -261,6 +306,50 @@ public fun is_name_taken(registry: &AgentRegistry, suins_name: String): bool {
     registry.agents.any!(|summary| summary.suins_name == suins_name)
 }
 
+/// The registry's summary for `agent_id`, or none.
+///
+/// Returns `Option` rather than aborting so callers keep their own, more
+/// precise error codes. `escrow::deal` uses this for three things it cannot
+/// otherwise know: the specialist's payout ADDRESS (the module must pin the
+/// payee — a client-signed release that returns the coin lets the client route
+/// it back to itself), the specialist's CANONICAL reputation id, and the
+/// specialist's owner for the distinct-owner check.
+public fun summary_of(registry: &AgentRegistry, agent_id: ID): Option<AgentSummary> {
+    let mut found = option::none();
+    registry.agents.do_ref!(|summary| {
+        if (summary.agent_id == agent_id) {
+            found = option::some(*summary);
+        }
+    });
+    found
+}
+
+/// Current owner address of a registered agent, or none.
+///
+/// The registry summary is authoritative because `transfer_ownership` updates
+/// the identity and the summary in the same call — which is what makes payouts
+/// follow an identity to its new owner rather than paying a stale address.
+public fun owner_of(registry: &AgentRegistry, agent_id: ID): Option<address> {
+    let summary = registry.summary_of(agent_id);
+    if (summary.is_some()) option::some(summary.destroy_some().owner)
+    else option::none()
+}
+
+public fun summary_name_verified(summary: &AgentSummary): bool {
+    summary.name_verified
+}
+
+fun assert_name_within_limits(suins_name: &String) {
+    assert!(suins_name.length() <= MAX_NAME_BYTES, ENameTooLong);
+}
+
+fun assert_capabilities_within_limits(capabilities: &vector<String>) {
+    assert!(capabilities.length() <= MAX_CAPABILITIES, ETooManyCapabilities);
+    capabilities.do_ref!(|c| {
+        assert!(c.length() <= MAX_CAPABILITY_BYTES, ETooManyCapabilities);
+    });
+}
+
 public fun summary_agent_id(summary: &AgentSummary): ID {
     summary.agent_id
 }
@@ -284,4 +373,16 @@ public fun summary_reputation_id(summary: &AgentSummary): ID {
 #[test_only]
 public fun init_for_testing(ctx: &mut TxContext) {
     init(ctx);
+}
+
+#[test_only]
+/// Fills the registry with `n` synthetic agents. Names are derived from fresh
+/// object addresses so they are unique without needing u64-to-String.
+public fun fill_registry_for_testing(registry: &mut AgentRegistry, n: u64, ctx: &mut TxContext) {
+    n.do!(|_| {
+        let name = ctx.fresh_object_address().to_string();
+        let (identity, reputation) = register(registry, name, vector[], ctx);
+        transfer::transfer(identity, ctx.sender());
+        reputation.share();
+    });
 }

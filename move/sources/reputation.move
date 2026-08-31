@@ -62,7 +62,22 @@ public struct ReputationUpdated has copy, drop {
 /// Emits the genesis `ReputationUpdated` so an indexer built on that event
 /// alone sees the cold-start score. Every later change emits the same event, so
 /// the event stream is now complete from creation.
-public fun new(agent_id: ID, ctx: &mut TxContext): Reputation {
+///
+/// `public(package)`, and this visibility is a security boundary (tightened
+/// 2026-08-31). While it was `public`, one PTB could call `new(<any agent_id>)`
+/// then the public `share` and mint a DECOY Reputation claiming any victim's
+/// agent — reconstructing exactly the `entry create_and_share` that was deleted
+/// for the same reason. That decoy defeated the `agent_id()` bindings in
+/// `deal`: an attacker passed a decoy for their own side of a dispute and the
+/// victim's real object for the other, taking zero blowback while driving a
+/// rival's score down for the cost of gas.
+///
+/// Package-only minting is what makes "exactly one Reputation per agent"
+/// true, which is in turn what makes `reputation.agent_id() == deal.x_agent`
+/// a sufficient check rather than a claim an attacker can forge. The only
+/// caller is `agent_identity::register`, which mints one per identity and
+/// links the two.
+public(package) fun new(agent_id: ID, ctx: &mut TxContext): Reputation {
     let reputation = Reputation {
         id: object::new(ctx),
         agent_id,
@@ -95,12 +110,11 @@ public fun new(agent_id: ID, ctx: &mut TxContext): Reputation {
 /// consume it the whole transaction fails with `UnusedValueWithoutDrop`, which
 /// is exactly what made the "composable" constructors uncallable.
 ///
-/// There was previously an `entry fun create_and_share(agent_id, ctx)` here.
-/// It is deleted, not widened: it let anyone mint and share a Reputation
-/// claiming any `agent_id`, which supplied the throwaway objects the escrow
-/// drain and reputation-farming attacks both needed. The real path is
-/// `agent_identity::register_and_keep`, which mints exactly one Reputation per
-/// identity and links the two.
+/// Safe to leave `public` even though `new` is not: without a package-internal
+/// mint, the only way to hold a `Reputation` by value is to have received it
+/// from `agent_identity::register`, which produces the canonical one. A public
+/// consume path with a package-only constructor is the combination that keeps
+/// PTB composability without reopening decoy minting.
 public fun share(reputation: Reputation) {
     transfer::share_object(reputation);
 }

@@ -264,3 +264,72 @@ fun non_owner_cannot_update_capabilities() {
     test_scenario::return_shared(registry);
     scenario.end();
 }
+
+#[test]
+fun the_registry_accepts_exactly_its_capacity() {
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    agent_identity::fill_registry_for_testing(&mut registry, 256, scenario.ctx());
+
+    assert_eq!(registry.agent_count(), 256);
+
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = agent_identity::ERegistryFull, location = agent_identity)]
+fun registering_past_the_cap_aborts() {
+    // The cap converts an irreversible brick — a registry pushed past the
+    // object-size ceiling, after which EVERY touching transaction aborts
+    // forever — into a clean, legible failure.
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut registry = scenario.take_shared<AgentRegistry>();
+    agent_identity::fill_registry_for_testing(&mut registry, 256, scenario.ctx());
+    test_scenario::return_shared(registry);
+
+    scenario.next_tx(LAWYER);
+    register(&mut scenario, b"one-too-many", legal_caps());
+
+    scenario.end();
+}
+
+#[test, expected_failure(abort_code = agent_identity::ETooManyCapabilities, location = agent_identity)]
+fun an_oversized_capability_list_is_rejected() {
+    // Bounding entry COUNT alone bounds the wrong dimension: unbounded strings
+    // could push the shared registry past the object-size ceiling at far fewer
+    // than 256 agents.
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    let mut caps = vector[];
+    17u64.do!(|_| caps.push_back(b"cap".to_string()));
+    register(&mut scenario, b"greedy", caps);
+
+    scenario.end();
+}
+
+#[test]
+fun a_new_agent_is_never_marked_name_verified() {
+    // `suins_name` is self-asserted. Person 4's discovery must render an
+    // unverified badge until a real SuiNS ownership proof exists.
+    let mut scenario = test_scenario::begin(LAWYER);
+    agent_identity::init_for_testing(scenario.ctx());
+
+    scenario.next_tx(LAWYER);
+    register(&mut scenario, b"legal-review", legal_caps());
+
+    scenario.next_tx(LAWYER);
+    let registry = scenario.take_shared<AgentRegistry>();
+    let agents = registry.agents();
+    assert!(!agents[0].summary_name_verified());
+
+    test_scenario::return_shared(registry);
+    scenario.end();
+}
