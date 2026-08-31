@@ -8,10 +8,10 @@
 // The formula now blends a Bayesian prior of PRIOR_WEIGHT virtual deals held at
 // COLD_START_SCORE:  score = (100*completed + 50*5) / (completed + disputed + 5)
 #[test_only]
-module escrow::reputation_tests;
+module custodia::reputation_tests;
 
 use std::unit_test::{assert_eq, destroy};
-use escrow::reputation;
+use custodia::reputation;
 
 /// A throwaway ID to stand in for an AgentIdentity. The UID must be explicitly
 /// deleted — it has no `drop`, so leaking it fails the borrow checker.

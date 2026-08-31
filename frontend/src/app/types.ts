@@ -45,7 +45,7 @@ export interface VerificationInfo {
 export interface StatusStep {
   id: StatusStepId;
   state: StatusStepState;
-  /** Short human-readable label, e.g. "Escrow locked". */
+  /** Short human-readable label, e.g. "Custodia locked". */
   label: string;
   /** Optional detail shown once the step is active/done — e.g. the
    * candidate's name+score, the Mandate snapshot, or verification info. */

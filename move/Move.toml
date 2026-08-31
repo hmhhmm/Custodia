@@ -1,5 +1,5 @@
 [package]
-name = "escrow"
+name = "custodia"
 edition = "2024"
 
 # No [dependencies] block: the Sui framework and MoveStdlib are resolved
@@ -8,7 +8,7 @@ edition = "2024"
 # entry is what produces the "Dependency 'Sui' is a legacy system name"
 # build error — verified against the installed `sui-move-project` skill.
 #
-# No [addresses] block either: the old `escrow = "0x0"` form is superseded.
+# No [addresses] block either: the old `custodia = "0x0"` form is superseded.
 # The published address is tracked in Published.toml, which the toolchain
 # creates on first `sui client publish`.
 #

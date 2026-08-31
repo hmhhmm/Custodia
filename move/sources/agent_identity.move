@@ -1,19 +1,19 @@
 // Owner: Person 1 (Move/contracts).
 //
 // AgentIdentity represents an on-chain identity for an AI agent participating
-// in Escrow. See /docs/ARCHITECTURE.md for the full object model and how this
+// in Custodia. See /docs/ARCHITECTURE.md for the full object model and how this
 // ties into Reputation.
 //
 // AgentIdentity itself is `key, store` and owned by the agent's controller.
 // AgentRegistry is a shared object that indexes every registered agent so
 // Person 4's `discoverAgents()` (frontend/src/agent/discovery.ts) can find
 // candidates by capability and reputation in a single object read.
-module escrow::agent_identity;
+module custodia::agent_identity;
 
 use std::string::String;
 use sui::address;
 use sui::event;
-use escrow::reputation::{Self, Reputation};
+use custodia::reputation::{Self, Reputation};
 
 #[error]
 const ENotOwner: vector<u8> = b"Only the agent owner can perform this action";
@@ -309,7 +309,7 @@ public fun is_name_taken(registry: &AgentRegistry, suins_name: String): bool {
 /// The registry's summary for `agent_id`, or none.
 ///
 /// Returns `Option` rather than aborting so callers keep their own, more
-/// precise error codes. `escrow::deal` uses this for three things it cannot
+/// precise error codes. `custodia::deal` uses this for three things it cannot
 /// otherwise know: the specialist's payout ADDRESS (the module must pin the
 /// payee — a client-signed release that returns the coin lets the client route
 /// it back to itself), the specialist's CANONICAL reputation id, and the

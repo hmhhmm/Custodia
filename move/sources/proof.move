@@ -14,7 +14,7 @@
 //     N different clients.
 //   * `proof.created_by == specialist.owner()` — no replaying a third party's
 //     genuine, high-quality attestation as your own.
-module escrow::proof;
+module custodia::proof;
 
 use std::string::String;
 use sui::clock::Clock;

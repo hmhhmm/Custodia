@@ -8,7 +8,7 @@
 // Reputation in one transaction, and neither party owns the other's. An
 // address-owned object could only be used by its owner, so shared is forced
 // here, not a preference.
-module escrow::reputation;
+module custodia::reputation;
 
 use sui::event;
 
@@ -119,15 +119,15 @@ public fun share(reputation: Reputation) {
     transfer::share_object(reputation);
 }
 
-/// Called from `escrow::deal::verify_and_release` for both sides of a
-/// released Deal. Package-visible so only Escrow's own modules can move an
+/// Called from `custodia::deal::verify_and_release` for both sides of a
+/// released Deal. Package-visible so only Custodia's own modules can move an
 /// agent's score — never callable directly from a PTB.
 public(package) fun record_completed(reputation: &mut Reputation) {
     reputation.completed_deals = reputation.completed_deals + 1;
     reputation.recalculate();
 }
 
-/// Called from `escrow::deal::raise_dispute`.
+/// Called from `custodia::deal::raise_dispute`.
 public(package) fun record_disputed(reputation: &mut Reputation) {
     reputation.disputed_deals = reputation.disputed_deals + 1;
     reputation.recalculate();

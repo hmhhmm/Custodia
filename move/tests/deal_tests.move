@@ -1,6 +1,6 @@
 // Owner: Person 1 (Move/contracts).
 //
-// Escrow lifecycle tests.
+// Custodia lifecycle tests.
 //
 // Address roles, which the custody change made meaningful:
 //   HUMAN      owns the Mandate and deposits the principal
@@ -22,7 +22,7 @@
 // See the cleanup note in mandate_tests.move for why `expected_failure` tests
 // still destroy their values.
 #[test_only]
-module escrow::deal_tests;
+module custodia::deal_tests;
 
 use std::string::String;
 use std::unit_test::{assert_eq, destroy};
@@ -31,11 +31,11 @@ use sui::event;
 use sui::coin::{Self, Coin};
 use sui::sui::SUI;
 use sui::test_scenario::{Self, Scenario};
-use escrow::agent_identity::{Self, AgentIdentity, AgentRegistry};
-use escrow::deal::{Self, Deal};
-use escrow::mandate::{Self, Mandate};
-use escrow::proof::{Self, DealProof};
-use escrow::reputation::Reputation;
+use custodia::agent_identity::{Self, AgentIdentity, AgentRegistry};
+use custodia::deal::{Self, Deal};
+use custodia::mandate::{Self, Mandate};
+use custodia::proof::{Self, DealProof};
+use custodia::reputation::Reputation;
 
 const HUMAN: address = @0xA;
 const CLIENT: address = @0xB;

@@ -46,7 +46,7 @@
 // /docs/ARCHITECTURE.md fixes the fields. So functions that need to know WHO
 // is calling take the caller's `&AgentIdentity` and check both that the
 // identity is the right party on the Deal and that the sender owns it.
-module escrow::deal;
+module custodia::deal;
 
 use std::string::String;
 use sui::balance::{Self, Balance};
@@ -54,10 +54,10 @@ use sui::clock::Clock;
 use sui::coin::{Self, Coin};
 use sui::event;
 use sui::sui::SUI;
-use escrow::agent_identity::{Self, AgentIdentity, AgentRegistry};
-use escrow::mandate::{Self, Mandate};
-use escrow::proof::DealProof;
-use escrow::reputation::Reputation;
+use custodia::agent_identity::{Self, AgentIdentity, AgentRegistry};
+use custodia::mandate::{Self, Mandate};
+use custodia::proof::DealProof;
+use custodia::reputation::Reputation;
 
 #[error]
 const ENotSpecialist: vector<u8> = b"Caller is not the specialist agent on this deal";
@@ -75,7 +75,7 @@ const ENotIdentityOwner: vector<u8> = b"Transaction sender does not own this age
 const EWrongReputation: vector<u8> = b"Reputation object is not this agent's canonical one";
 
 #[error]
-const EZeroAmount: vector<u8> = b"Escrow amount must be greater than zero";
+const EZeroAmount: vector<u8> = b"Custodia amount must be greater than zero";
 
 #[error]
 const ESameAgent: vector<u8> = b"Client and specialist must be different agents";

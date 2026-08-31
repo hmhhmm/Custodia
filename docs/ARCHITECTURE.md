@@ -1,14 +1,14 @@
-# Escrow — System Architecture
+# Custodia — System Architecture
 
 ## Summary
 
-Escrow is a neutral, on-chain trust and settlement layer built on Sui
+Custodia is a neutral, on-chain trust and settlement layer built on Sui
 that lets AI agents discover each other, negotiate privately, verify
 delivered work, and get paid automatically via escrow — without a
 centralized platform sitting in the middle of the transaction. Envoy is
 the companion user-facing personal agent: it talks to a human in plain
 language, translates their goal into a scoped mandate, and drives the
-Escrow flow on their behalf. This document is the shared source of truth
+Custodia flow on their behalf. This document is the shared source of truth
 for the object model, the end-to-end flow, and team ownership boundaries;
 read it before making any structural change, and update it (not just your
 own head) when a decision changes.
@@ -23,7 +23,7 @@ Envoy (off-chain orchestration)
   │  interprets goal, discovers/negotiates with specialist agents,
   │  drafts transactions on the user's behalf within their Mandate
   ▼
-Escrow (on-chain trust layer)
+Custodia (on-chain trust layer)
   │  identity, reputation, mandate enforcement, escrow lock/release
   ▼
 Sui Move objects
@@ -31,7 +31,7 @@ Sui Move objects
 ```
 
 Envoy never holds funds or bypasses a Mandate — every spend it initiates
-is checked against an on-chain Mandate object before Escrow will lock
+is checked against an on-chain Mandate object before Custodia will lock
 escrow.
 
 ## Core Move objects
@@ -79,7 +79,7 @@ Person 1 before other people's code depends on it.
 | specialist_agent | ID | |
 | escrowed_amount | Balance\<SUI\> | |
 | status | enum: Negotiating, Escrowed, **Accepted**, Delivered, Verified, Released, Disputed, **Refunded**, **Settled** | **THREE VARIANTS ADDED 2026-08-31.** `status_rank` renumbered: Released 4→5, Disputed 5→6, plus 7 Refunded and 8 Settled |
-| proof_ref | Option\<ID\> | Points at an `escrow::proof::DealProof`, which is now a real object bound to this deal and its specialist — no longer an unvalidated ID |
+| proof_ref | Option\<ID\> | Points at an `custodia::proof::DealProof`, which is now a real object bound to this deal and its specialist — no longer an unvalidated ID |
 | funding_mandate | ID | **ADDED (rule 5 change).** The Mandate this deal drew from. Refunds must return to it, or a refunded deal permanently burns the human's budget and an attacker could refund into their own Mandate |
 | arbiter | Option\<address\> | **ADDED (rule 5 change).** Optional referee, named by the client and ratified by the specialist's `accept`. Can only split this deal between these parties, and cannot stall |
 | review_window_ms | u64 | **ADDED (rule 5 change).** Agreed at creation, applied at delivery |
@@ -159,7 +159,7 @@ narrative needs both:
 Today, even with Seal, one side still *executes* the negotiation: it sees
 the counterparty's position and reports back a result the other side has
 to take on faith. Between agents built by two different companies with no
-prior relationship — the exact case Escrow exists for — that is an
+prior relationship — the exact case Custodia exists for — that is an
 unmet trust assumption, not a detail. A TEE closes it by making the
 negotiation a sealed-bid computation neither side controls.
 
@@ -181,7 +181,7 @@ to agree a price when neither trusts the other's software.
 
 ### Open design gap — must be resolved before implementing
 
-`escrow::deal_access::DealAllowlist` is keyed on `deal_id`, and the Deal
+`custodia::deal_access::DealAllowlist` is keyed on `deal_id`, and the Deal
 object does not exist until PTB #1 at **Step 6**. Negotiation happens at
 **Step 4**. There is therefore no Deal-scoped allowlist to encrypt a
 negotiation against, and this affects the existing Seal design as much as
@@ -242,7 +242,7 @@ Status of Person 3's scope as of this writing:
 | Piece | Status | Notes |
 |---|---|---|
 | Walrus | **Real, wired into the demo flow** | HTTP API via public testnet publisher/aggregator, confirmed against the installed `accessing-data` Sui skill (docs.wal.app returned 403 to direct fetches this session — the skill's `walrus.md` was the working verification source). `frontend/src/app/demoStatusSequence.ts` now actually calls `storeBlob()` for the "work-in-progress" step — verified live: a real `PUT` to `publisher.walrus-testnet.walrus.space` returns `200` with a genuine blob ID, though the public testnet publisher took ~11.7s to respond in testing, hence the "this can take several seconds" status message. Endpoints are community-run and may change; re-verify against docs.wal.app before mainnet. |
-| Seal | **Real code, still blocked** | `@mysten/seal` package name confirmed via docs.sui.io. Encrypt/decrypt call shapes and the `seal_approve` Move convention are documented and implemented per-spec, but both `encryptNegotiationTerms`/`decryptNegotiationTerms` still throw "not implemented" — blocked on `@mysten/seal` not being installed and `escrow::deal_access` (Move) being an unimplemented stub. Not wired into the demo sequence; the "negotiating" step remains scripted. |
+| Seal | **Real code, still blocked** | `@mysten/seal` package name confirmed via docs.sui.io. Encrypt/decrypt call shapes and the `seal_approve` Move convention are documented and implemented per-spec, but both `encryptNegotiationTerms`/`decryptNegotiationTerms` still throw "not implemented" — blocked on `@mysten/seal` not being installed and `custodia::deal_access` (Move) being an unimplemented stub. Not wired into the demo sequence; the "negotiating" step remains scripted. |
 | Nautilus | **Mocked by design, wired into the demo flow** | Real Nautilus requires deploying an actual AWS Nitro Enclave (or Marlin Oyster), registering PCR measurements on-chain, and verifying AWS certificate chains in Move — genuine infrastructure work, not an SDK call, and Mysten's own template is explicitly unaudited/incomplete. `demoStatusSequence.ts` now actually calls `mockNautilusAttest()` on the real bytes stored via Walrus above, rather than hardcoding a `{ mocked: true }` literal in the UI layer — the `attestationId` and `resultHash` shown to the user are genuinely computed, not fake strings. Every consumer (UI, logs) must surface the `mocked` flag — never let a simulated attestation appear indistinguishable from a real one in the demo. |
 | TEE negotiation channel (Step 4) | **Design only — nothing built** | Added 2026-08-29 at the team's explicit request, expanding the original scope. Gives neutral execution of the negotiation, which Seal alone does not. Blocked on the pre-Deal `NegotiationSession` ID gap and on confirming Nautilus supports a multi-party session pattern. See "TEE-mediated agent-to-agent negotiation (Step 4)" above. |
 | `Deal.proof_ref` format | **PROPOSED, not yet confirmed with Person 1** | See `frontend/src/verification/proof.ts` for the proposed shape (an on-chain pointer object holding a Walrus blob ID, an attestation ID, and an `attestation_mocked` bool) and the rejected alternative. `Deal.proof_ref` is still an unimplemented `Option<ID>` stub in `move/sources/deal.move` — this proposal has to be confirmed once Person 1 builds it out. |
@@ -263,9 +263,12 @@ project, not a follow-up SDK task.
 | 3 — Verification/storage | `/frontend/src/verification/` (or a dedicated services package — propose if a separate Node service is cleaner) — Walrus, Seal, Nautilus attestation flow | Person 1 (what proof_ref should point at), Person 2 (how proof_ref gets written into PTB #2) |
 | 4 — Frontend + orchestration | `/frontend/src/app/` (UI) and `/frontend/src/agent/` (LLM calls, discovery/matching, scripted specialist stand-ins) | Person 2 (transaction request shape), Person 3 (what proof data looks like once available) |
 
-**RESOLVED — the Move side is built, hardened, and REPUBLISHED 2026-08-31.**
+**RESOLVED — the Move side is built, hardened, renamed to `custodia`, and REPUBLISHED 2026-08-31.**
 
-⚠️ **BREAKING for Person 2 and Person 4.** The second publish changed
+⚠️ **BREAKING for Person 2 and Person 4.** Every Move call target is now
+`custodia::*`, not `escrow::*` — the package was renamed, which changes every
+on-chain type string and forced a third publish. The hardening round also
+changed
 signatures, added `Deal` and `Mandate` fields, and renumbered `status_rank`.
 The old package `0x8e50044a…` is superseded; do not point at it.
 
@@ -281,8 +284,8 @@ Core flow, in order:
   accepts.
 - `deal::mark_delivered(&mut Deal, &AgentIdentity /* specialist */,
   &DealProof, &Clock, &TxContext)` — takes a real proof OBJECT now, not a
-  bare `ID`. Build it with `escrow::proof::new_simulated(...)` and consume it
-  with `escrow::proof::share_proof(...)`.
+  bare `ID`. Build it with `custodia::proof::new_simulated(...)` and consume it
+  with `custodia::proof::share_proof(...)`.
 - `deal::verify_and_release(&mut Deal, &AgentRegistry, &AgentIdentity
   /* client */, &mut Reputation, &mut Reputation, &mut TxContext)` —
   **client-signed, and RETURNS NOTHING.** It pays the specialist's

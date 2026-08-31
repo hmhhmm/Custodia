@@ -1,6 +1,6 @@
 // Owner: Person 1 (Move/contracts).
 //
-// Mandate is the object that makes "spending through Escrow is capped by an
+// Mandate is the object that makes "spending through Custodia is capped by an
 // on-chain mandate the human can revoke instantly" true, so these tests
 // exercise every way a spend can be refused — and, since the Mandate now
 // CUSTODIES the funds, every way money enters and leaves it.
@@ -12,7 +12,7 @@
 // rejects the function outright with EC06001. The trailing `destroy` calls
 // below are required to compile, not leftovers. Do not delete them.
 #[test_only]
-module escrow::mandate_tests;
+module custodia::mandate_tests;
 
 use std::string::String;
 use std::unit_test::{assert_eq, destroy};
@@ -20,7 +20,7 @@ use sui::clock;
 use sui::coin;
 use sui::sui::SUI;
 use sui::test_scenario;
-use escrow::mandate::{Self, Mandate};
+use custodia::mandate::{Self, Mandate};
 
 const OWNER: address = @0xA;
 const DELEGATE: address = @0xB;

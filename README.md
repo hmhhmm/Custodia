@@ -1,11 +1,11 @@
-# Escrow
+# Custodia
 
 On-chain trust and settlement for AI agents — discovery, negotiation,
 verification, and escrow-backed payment, on Sui.
 
 ## Pitch
 
-Escrow is a neutral, on-chain trust and settlement layer on Sui that lets
+Custodia is a neutral, on-chain trust and settlement layer on Sui that lets
 AI agents discover each other, negotiate privately, verify delivered
 work, and get paid automatically via escrow — without a centralized
 platform in the middle. Envoy, the companion user-facing agent, talks to
@@ -101,8 +101,8 @@ VITE_SUI_NETWORK=testnet                # VERIFY: exact expected values
 
 # Deployed 2026-08-31 to Sui testnet by Person 1. These two are REAL values,
 # not placeholders — copy them as-is. See "Deployed addresses" below.
-VITE_ESCROW_PACKAGE_ID=0xa916afaeecee2143f539e680e1feb50e991968c305d690c5109e7dc87ed8425e
-VITE_AGENT_REGISTRY_ID=0xc7782a5150889033fb4d7f3efb801b7fd38a0370c9f16e56003654040215ecb5
+VITE_CUSTODIA_PACKAGE_ID=0xe44db9dae1713a464ae2f5289981ae1ec0466449402f17cb020bf4df83fdb307
+VITE_AGENT_REGISTRY_ID=0x6681f04bb13d943f997ba61f2ca458b9d695990c65d5222175cd8bdacdc54ed0
 
 VITE_ENOKI_API_KEY=                     # VERIFY: exact env var name in Enoki docs
 VITE_WALRUS_PUBLISHER_URL=              # VERIFY: exact env var name / current publisher URL in Walrus docs
@@ -113,18 +113,18 @@ VITE_NAUTILUS_ENDPOINT=                 # VERIFY: exact env var name in Nautilus
 
 ## Deployed addresses (Sui testnet)
 
-Published 2026-08-31 (second publish — the first, `0x8e50044a…`, is superseded and must not be used). Chain ID `4c78adac`. Also recorded in
+Published 2026-08-31 (THIRD publish, after the Custodia rename — the package name is part of every on-chain type string, so renaming forced a fresh package. `0x8e50044a…` and `0xa916af…` are both dead). Chain ID `4c78adac`. Also recorded in
 `move/Published.toml`, which the toolchain reads — do not hand-edit it.
 
 | What | Value |
 |---|---|
-| Package ID | `0xa916afaeecee2143f539e680e1feb50e991968c305d690c5109e7dc87ed8425e` |
-| `AgentRegistry` (shared) | `0xc7782a5150889033fb4d7f3efb801b7fd38a0370c9f16e56003654040215ecb5` |
-| `UpgradeCap` | `0x3f01d366f3a882a1e0e1fded8e281653558809140f2a9c58064b9ef1cebc60d2` |
+| Package ID | `0xe44db9dae1713a464ae2f5289981ae1ec0466449402f17cb020bf4df83fdb307` |
+| `AgentRegistry` (shared) | `0x6681f04bb13d943f997ba61f2ca458b9d695990c65d5222175cd8bdacdc54ed0` |
+| `UpgradeCap` | `0x478c3bc75652d3768d01cc3348f7f6c4ed049cdac3468bfc6f49e2e828a1c35d` |
 | **Upgrade authority** (holds the cap) | `0x02ceac8c4e5bdb8b903974125f4c9fbe08fb458436e1d5ba23ead03745e28ef5` — Person 1's wallet |
 | Publisher (historical only) | `0x65547073f0f184ad64ad8146125f76d81de9b42ec3a9c2b551a7163eddf976f1` — CLI keystore |
-| Publish transaction | `2NXdHyvN7HxHpHViuVUCw9w35SiahL685xBadqfKUFiU` |
-| `UpgradeCap` transfer | `7vDnweihVQJwZePH89Kzk7DaVSENjBgz3QHoMP9wuRBE` |
+| Publish transaction | `3Fs9ijA64JGUW8uPbrUPxnsz127KKs8EdFWPeCVxi2xk` |
+| `UpgradeCap` transfer | `24Jp2o5DkKE4uWWRKpSqJZGk2zLGUKWejE66PtTnrYRb` |
 
 The package was published from the CLI keystore address, then the `UpgradeCap`
 was transferred to Person 1's wallet. The publisher address is recorded in

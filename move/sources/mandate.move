@@ -35,7 +35,7 @@
 // `min(max_spend - spent_so_far, funds)`, exposed as `spendable()`. A human
 // can custody 100 SUI while authorising 10, then widen later without moving
 // money.
-module escrow::mandate;
+module custodia::mandate;
 
 use std::string::String;
 use sui::balance::{Self, Balance};
@@ -239,7 +239,7 @@ public fun reclaim(mandate: &mut Mandate, ctx: &mut TxContext): Coin<SUI> {
 }
 
 /// Aborts unless `amount` in `category` is permitted right now. Called from
-/// `escrow::deal::create_and_lock_escrow` before any funds move — if this
+/// `custodia::deal::create_and_lock_escrow` before any funds move — if this
 /// aborts, the entire PTB reverts and no escrow is locked.
 ///
 /// Signature unchanged so Person 2's existing call site survives; the custody
@@ -309,7 +309,7 @@ public(package) fun refund(mandate: &mut Mandate, returned: Coin<SUI>) {
     });
 }
 
-/// Records a spend against the mandate. Package-visible: only Escrow's own
+/// Records a spend against the mandate. Package-visible: only Custodia's own
 /// escrow flow may advance `spent_so_far`, never a direct PTB call.
 fun record_spend(mandate: &mut Mandate, amount: u64) {
     assert!(amount <= mandate.max_spend - mandate.spent_so_far, ESpendLimitExceeded);

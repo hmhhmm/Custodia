@@ -22,7 +22,7 @@
 //     resolves -> should drive "payment-released" and "reputation-updated"
 //   - Seal encryption of negotiation terms (verification/seal.ts) is
 //     still blocked on @mysten/seal not being installed and
-//     escrow::deal_access not being implemented — not wired here, the
+//     custodia::deal_access not being implemented — not wired here, the
 //     "negotiating" step stays scripted.
 
 import { storeBlob } from "../verification/walrus";
@@ -47,7 +47,7 @@ export async function runDemoStatusSequence(
     { id: "candidate-found", state: "pending", label: "Candidate found" },
     { id: "negotiating", state: "pending", label: "Negotiating terms" },
     { id: "mandate-check", state: "pending", label: "Checking mandate" },
-    { id: "escrow-locked", state: "pending", label: "Escrow locked" },
+    { id: "escrow-locked", state: "pending", label: "Custodia locked" },
     { id: "work-in-progress", state: "pending", label: "Work in progress" },
     { id: "verification", state: "pending", label: "Verifying delivery" },
     { id: "payment-released", state: "pending", label: "Payment released" },

@@ -38,7 +38,7 @@ export interface ProofPointer {
 /**
  * Shapes verification outputs into the PROPOSED proof_ref pointer format.
  * Does NOT itself submit a transaction — that belongs in Person 2's
- * frontend/src/sui/ptb-release.ts once escrow::deal::mark_delivered's
+ * frontend/src/sui/ptb-release.ts once custodia::deal::mark_delivered's
  * exact argument order is confirmed (see /docs/ARCHITECTURE.md TBD list).
  */
 export function buildProofPointer(
@@ -53,7 +53,7 @@ export function buildProofPointer(
 }
 
 /**
- * TODO: once escrow::deal::mark_delivered and a proof-object-creation
+ * TODO: once custodia::deal::mark_delivered and a proof-object-creation
  * function (if Person 1 adds one — see PROPOSED format above) are
  * deployed, implement:
  *

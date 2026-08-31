@@ -89,7 +89,7 @@ export function Dashboard({
       {deals.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border py-16 text-center">
           <p className="text-manifest">
-            No deals yet. Describe what you need done, and Escrow finds who can do it.
+            No deals yet. Describe what you need done, and Custodia finds who can do it.
           </p>
         </div>
       ) : (

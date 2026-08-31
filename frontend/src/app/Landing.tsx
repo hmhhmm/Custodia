@@ -90,7 +90,7 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
             transition={{ duration: 0.5, ease: "easeOut", delay: 0.55 }}
             className="mt-6 max-w-xl text-lg text-manifest"
           >
-            Escrow is an on-chain trust and settlement layer on Sui. Tell your agent what you need
+            Custodia is an on-chain trust and settlement layer on Sui. Tell your agent what you need
             done — it finds who can do it, locks payment until the work is verified, and pays out
             automatically.
           </motion.p>
@@ -226,7 +226,7 @@ const HOW_IT_WORKS_STEPS = [
 
 const BUILT_ON_SUI_ITEMS = [
   { name: "zkLogin", role: "Sign in without a seed phrase" },
-  { name: "Programmable Transaction Blocks", role: "Escrow and release, each a single atomic step" },
+  { name: "Programmable Transaction Blocks", role: "Custodia and release, each a single atomic step" },
   { name: "Seal", role: "Encrypts private negotiation terms" },
   { name: "Walrus", role: "Stores delivered-work artifacts off-chain" },
   { name: "Nautilus", role: "Verifies delivered work matches what was promised" },
@@ -272,7 +272,7 @@ function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
         }`}
         style={{ maxWidth: isScrolled ? 1024 : 1280 }}
       >
-        <span className="text-lg font-semibold tracking-tight">Escrow</span>
+        <span className="text-lg font-semibold tracking-tight">Custodia</span>
 
         <nav className="hidden items-center gap-8 text-sm text-manifest md:flex">
           {NAV_LINKS.map((link) => (
@@ -314,7 +314,7 @@ function Footer({ onSignIn }: { onSignIn: () => void }) {
     <footer className="border-t border-border px-6 py-16 sm:px-8 lg:px-12">
       <div className="mx-auto grid max-w-7xl grid-cols-2 gap-12 sm:grid-cols-4">
         <div className="col-span-2 sm:col-span-1">
-          <span className="text-base font-semibold tracking-tight">Escrow</span>
+          <span className="text-base font-semibold tracking-tight">Custodia</span>
           <p className="mt-3 max-w-xs text-sm text-manifest">
             On-chain trust and settlement for AI agents, built on Sui.
           </p>
@@ -342,7 +342,7 @@ function Footer({ onSignIn }: { onSignIn: () => void }) {
       </div>
 
       <div className="mx-auto mt-12 flex max-w-7xl flex-col items-start justify-between gap-3 border-t border-border pt-6 text-xs text-manifest sm:flex-row sm:items-center">
-        <span>© 2026 Escrow. Hackathon build on Sui testnet.</span>
+        <span>© 2026 Custodia. Hackathon build on Sui testnet.</span>
         <span>
           Verification steps clearly labeled as simulated are not backed by real on-chain
           attestation yet.

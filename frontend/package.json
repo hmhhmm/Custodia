@@ -1,5 +1,5 @@
 {
-  "name": "@escrow/frontend",
+  "name": "@custodia/frontend",
   "private": true,
   "version": "0.0.0",
   "type": "module",

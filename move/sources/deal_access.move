@@ -1,6 +1,6 @@
 // Owner: Person 3 (verification/storage) — added to Person 1's /move/
 // package rather than a separate Move package, since it must be published
-// alongside `escrow::deal` for the package ID used in Seal's
+// alongside `custodia::deal` for the package ID used in Seal's
 // `seal_approve` moveCall target to be meaningful. Coordinate with
 // Person 1 before renaming/moving this module.
 //
@@ -19,7 +19,7 @@
 // checking) against https://docs.sui.io/sui-stack/seal/using-seal — this
 // file follows the documented shape but has not been built/tested against
 // a real Seal key server yet.
-module escrow::deal_access {
+module custodia::deal_access {
     // VERIFY: exact `use` paths (object::UID, tx_context::TxContext,
     // sui::table::Table or similar) before implementing.
 

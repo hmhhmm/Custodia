@@ -5,13 +5,13 @@
 // discovery depends on: every registered agent appears in the shared registry
 // with its capabilities and a pointer to its Reputation.
 #[test_only]
-module escrow::agent_identity_tests;
+module custodia::agent_identity_tests;
 
 use std::string::String;
 use std::unit_test::{assert_eq, destroy};
 use sui::test_scenario::{Self, Scenario};
-use escrow::agent_identity::{Self, AgentIdentity, AgentRegistry};
-use escrow::reputation::{Self, Reputation};
+use custodia::agent_identity::{Self, AgentIdentity, AgentRegistry};
+use custodia::reputation::{Self, Reputation};
 
 const LAWYER: address = @0xA;
 const COURIER: address = @0xB;
