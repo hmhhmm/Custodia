@@ -353,8 +353,13 @@ canonical list or the first real PTB #1 aborts with `ECategoryNotAllowed`.
 - Reputation is **Sybil-vulnerable**: addresses are free, so a human with two
   funded addresses can wash-trade a score for gas. The distinct-owner check is a
   speed bump. The real fix is an external identity anchor (SuiNS ownership).
-- `suins_name` ownership is **unproven** — no installed skill covers SuiNS, so
-  per CLAUDE.md rule 1 nothing was invented.
+- `suins_name` ownership is **now verifiable**: `agent_identity::verify_name`
+  proves control via the address-owned `SuinsRegistration` capability and flips
+  `name_verified`. API verified against suins-contracts source. Person 4 shows a
+  real verified badge; Person 2's registration UI must store the full ".sui"
+  name for the exact-string match to pass. Reputation is still Sybil-vulnerable
+  because one human can hold several names — this is a strong speed bump, not a
+  full solution.
 - `deal_access::seal_approve` is still a TODO and is Person 3's call.
 - Whoever holds the `UpgradeCap` can publish a new in-package function that
   drains escrow. `only_additive_upgrades` at publish would prevent that, at the

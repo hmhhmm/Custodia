@@ -6,7 +6,7 @@ edition = "2024"
 # SuinsRegistration and its `domain_name()` getter were verified against the
 # suins-contracts source this session (rule 1), not assumed.
 [dependencies]
-suins = { git = "https://github.com/mystenlabs/suins-contracts.git", subdir = "packages/suins", rev = "releases/mainnet/core/v3" }
+suins = { git = "https://github.com/mystenlabs/suins-contracts.git", subdir = "packages/suins", rev = "testnet" }
 
 # No explicit Sui/MoveStdlib entry: the framework is resolved automatically by
 # Sui CLI v1.63+, and suins pulls the same framework transitively. Adding an

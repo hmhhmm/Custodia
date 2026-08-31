@@ -11,7 +11,7 @@ manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05
 deps = {}
 
 [pinned.testnet.MoveStdlib_1]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "722ac4fcf4841346c91775f596c4ce23fb7fbd0f" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "6f6f095c246733e7b155abebb63a4e64d64e17b9" }
 use_environment = "testnet"
 manifest_digest = "C4FE4C91DE74CBF223B2E380AE40F592177D21870DC2D7EB6227D2D694E05363"
 deps = {}
@@ -23,7 +23,7 @@ manifest_digest = "7AFB66695545775FBFBB2D3078ADFD084244D5002392E837FDE21D9EA1C6D
 deps = { MoveStdlib = "MoveStdlib" }
 
 [pinned.testnet.Sui_1]
-source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "722ac4fcf4841346c91775f596c4ce23fb7fbd0f" }
+source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "6f6f095c246733e7b155abebb63a4e64d64e17b9" }
 use_environment = "testnet"
 manifest_digest = "7AFB66695545775FBFBB2D3078ADFD084244D5002392E837FDE21D9EA1C6D01C"
 deps = { MoveStdlib = "MoveStdlib_1" }
@@ -31,11 +31,11 @@ deps = { MoveStdlib = "MoveStdlib_1" }
 [pinned.testnet.custodia]
 source = { root = true }
 use_environment = "testnet"
-manifest_digest = "2C4FF7AB8F8954FA4DAC0B2DFEEAFD53EC1CC710C12B328D8E328C6F750E5C58"
+manifest_digest = "41F4936FDDB2CC194AA9AE9CB84B55492245A25E17B91FA5C2DBE065571CB421"
 deps = { std = "MoveStdlib", sui = "Sui", suins = "suins" }
 
 [pinned.testnet.suins]
-source = { git = "https://github.com/mystenlabs/suins-contracts.git", subdir = "packages/suins", rev = "4fb9b9c9c2c3d2d13a7b28f9fe1124c3907cb820" }
+source = { git = "https://github.com/mystenlabs/suins-contracts.git", subdir = "packages/suins", rev = "5c0adfddee7385a7d1f8e3ac82a512586b548903" }
 use_environment = "testnet"
-manifest_digest = "0532D72C4F42A4472D331C54E2F8FB1595A305815D58568D26C6F8A4AC9BBFCE"
+manifest_digest = "DEE42C89BB3F8EC67C17BC4AE0CEBE14A28F4FA787E857046EAF0FA38D556496"
 deps = { Sui = "Sui_1" }
