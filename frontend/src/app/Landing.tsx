@@ -95,8 +95,13 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
             {/* Real wallet connect (ConnectButton from @mysten/dapp-kit-react/ui)
                 — zkLogin (frontend/src/sui/zkLogin.ts) is still a stub, so the
                 copy below describes what actually happens today, not a
-                Google sign-in that doesn't exist yet. */}
-            <ConnectButton className="rounded-md bg-white px-6 py-3 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
+                Google sign-in that doesn't exist yet.
+                ConnectButton is a shadow-DOM web component: its visible
+                button lives behind the `trigger` CSS part, so Tailwind
+                classes on the host don't reach it — hence the doubled-up
+                look. Theme it via the documented CSS custom properties and
+                `::part(trigger)` instead (see connect-button.css). */}
+            <ConnectButton className="connect-button-white" />
             <p className="text-xs text-manifest">
               Connects a real Sui testnet wallet — zkLogin sign-in is coming soon.
             </p>
