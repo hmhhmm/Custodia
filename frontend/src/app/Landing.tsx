@@ -25,6 +25,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
+import { ConnectButton } from "@mysten/dapp-kit-react/ui";
 
 const HEADLINE_WORDS = "This isn't a promise. It's proof.".split(" ");
 
@@ -101,15 +102,13 @@ export function Landing({ onSignIn }: { onSignIn: () => void }) {
             transition={{ duration: 0.5, ease: "easeOut", delay: 0.65 }}
             className="mt-9 flex flex-col items-center gap-3"
           >
-            <button
-              type="button"
-              onClick={onSignIn}
-              className="rounded-md bg-white px-6 py-3 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              Continue with Google
-            </button>
+            {/* Real wallet connect (ConnectButton from @mysten/dapp-kit-react/ui)
+                — zkLogin (frontend/src/sui/zkLogin.ts) is still a stub, so the
+                copy below describes what actually happens today, not a
+                Google sign-in that doesn't exist yet. */}
+            <ConnectButton className="rounded-md bg-white px-6 py-3 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" />
             <p className="text-xs text-manifest">
-              Signs you in via zkLogin — no seed phrase, no extension required.
+              Connects a real Sui testnet wallet — zkLogin sign-in is coming soon.
             </p>
           </motion.div>
         </section>

@@ -9,16 +9,18 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { AppShell, type NavItem } from "./components/AppShell";
 import { Landing } from "./Landing";
+import { Onboarding } from "./Onboarding";
 import { Dashboard } from "./Dashboard";
 import { GoalInput } from "./GoalInput";
 import { StatusFeed } from "./StatusFeed";
 import { Receipt } from "./Receipt";
-import { runDemoStatusSequence } from "./demoStatusSequence";
+import { runOrchestratedDeal } from "./orchestrator";
 import type { DealReceipt, DealSummary, StatusStep } from "./types";
 
-type Screen = "dashboard" | "goal" | "status" | "receipt";
+type Screen = "onboarding" | "dashboard" | "goal" | "status" | "receipt";
 
 const SEED_DEALS: DealSummary[] = [
   {
@@ -61,21 +63,16 @@ function ScreenTransition({ children }: { children: React.ReactNode }) {
 }
 
 export function App() {
-  const [authenticated, setAuthenticated] = useState(false);
+  const account = useCurrentAccount();
+  const authenticated = account !== null;
   const [nav, setNav] = useState<NavItem>("active");
-  const [screen, setScreen] = useState<Screen>("dashboard");
+  const [screen, setScreen] = useState<Screen>("onboarding");
   const [deals, setDeals] = useState<DealSummary[]>(SEED_DEALS);
   const [steps, setSteps] = useState<StatusStep[]>([]);
   const [currentGoal, setCurrentGoal] = useState<{ counterpartyName?: string; description?: string } | null>(
     null,
   );
   const [receipt, setReceipt] = useState<DealReceipt | null>(null);
-
-  function handleLogin() {
-    // TODO: replace with Person 2's real zkLogin flow
-    // (frontend/src/sui/zkLogin.ts) once implemented.
-    setAuthenticated(true);
-  }
 
   function handleNewDeal() {
     setScreen("goal");
@@ -84,10 +81,11 @@ export function App() {
   function handleGoalSubmit(goal: string) {
     setScreen("status");
     setCurrentGoal({ description: goal });
-    // DEMO-ONLY: drives the status feed with a scripted sequence on
-    // placeholder data — see demoStatusSequence.ts for what must replace
-    // this once Person 1/2/3's real integration points land.
-    runDemoStatusSequence(goal, {
+    // Real orchestration: calls Gemini (llm.ts), on-chain discovery
+    // (discovery.ts), the real PTBs (sui/ptb-*.ts), and Person 3's real
+    // Walrus + Nautilus-mock calls. See orchestrator.ts for exactly which
+    // steps are genuinely on-chain vs. still scripted, and why.
+    runOrchestratedDeal(goal, account?.address, {
       onStepsChange: (nextSteps) => {
         setSteps(nextSteps);
         const found = nextSteps.find((s) => s.id === "candidate-found");
@@ -129,12 +127,23 @@ export function App() {
   }
 
   if (!authenticated) {
-    return <Landing onSignIn={handleLogin} />;
+    // onSignIn is now a no-op for the secondary CTAs (footer, closing
+    // section) — the real connect action lives in Landing's hero
+    // ConnectButton. Clicking those secondary buttons currently does
+    // nothing; scrolling to the hero's real ConnectButton is the actual
+    // path to sign in. TODO: wire the secondary CTAs to scroll-into-view
+    // the hero ConnectButton, or render a ConnectButton there too.
+    return <Landing onSignIn={() => {}} />;
   }
 
   return (
     <AppShell activeNav={nav} onNavChange={setNav} identityLabel="you">
       <AnimatePresence mode="wait">
+        {screen === "onboarding" && (
+          <ScreenTransition key="onboarding">
+            <Onboarding onComplete={() => setScreen("dashboard")} />
+          </ScreenTransition>
+        )}
         {screen === "dashboard" && (
           <ScreenTransition key="dashboard">
             <Dashboard deals={deals} onNewDeal={handleNewDeal} />
