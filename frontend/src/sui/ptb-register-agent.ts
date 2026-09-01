@@ -29,11 +29,26 @@ export function buildRegisterAgentTx(params: {
   return tx;
 }
 
-export function extractAgentIdFromResult(result: {
+export interface RegisteredAgent {
+  agentId: string;
+  reputationId: string;
+}
+
+/**
+ * Reads BOTH IDs a caller needs after registering — not just agent_id.
+ * FIXED: an earlier version of this file only returned agent_id, and the
+ * caller (Onboarding.tsx) discarded even that, so nothing downstream
+ * (orchestrator.ts) ever had a real AgentIdentity/Reputation ID to use —
+ * confirmed as a live bug by a fresh audit this session. AgentRegistered
+ * carries reputation_id too (see agent_identity.move's event struct), so
+ * there is no reason to make a second query for it.
+ */
+export function extractRegisteredAgent(result: {
   events?: { type: string; parsedJson?: unknown }[];
-}): string | null {
+}): RegisteredAgent | null {
   const event = result.events?.find((e) => e.type.endsWith('::agent_identity::AgentRegistered'));
   if (!event) return null;
-  const parsed = event.parsedJson as { agent_id?: string } | undefined;
-  return parsed?.agent_id ?? null;
+  const parsed = event.parsedJson as { agent_id?: string; reputation_id?: string } | undefined;
+  if (!parsed?.agent_id || !parsed?.reputation_id) return null;
+  return { agentId: parsed.agent_id, reputationId: parsed.reputation_id };
 }

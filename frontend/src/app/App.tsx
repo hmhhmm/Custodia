@@ -12,7 +12,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { AppShell, type NavItem } from "./components/AppShell";
 import { Landing } from "./Landing";
-import { Onboarding } from "./Onboarding";
+import { Onboarding, type OnboardingResult } from "./Onboarding";
 import { Dashboard } from "./Dashboard";
 import { GoalInput } from "./GoalInput";
 import { StatusFeed } from "./StatusFeed";
@@ -73,19 +73,28 @@ export function App() {
     null,
   );
   const [receipt, setReceipt] = useState<DealReceipt | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingResult | null>(null);
 
   function handleNewDeal() {
     setScreen("goal");
   }
 
   function handleGoalSubmit(goal: string) {
+    if (!onboarding) {
+      // Should be unreachable — GoalInput is only rendered after
+      // onboarding completes — but guard rather than silently pass
+      // undefined IDs into the orchestrator (that was the exact class of
+      // bug found by this session's audit: unverified IDs quietly
+      // substituted with something wrong).
+      return;
+    }
     setScreen("status");
     setCurrentGoal({ description: goal });
     // Real orchestration: calls Gemini (llm.ts), on-chain discovery
     // (discovery.ts), the real PTBs (sui/ptb-*.ts), and Person 3's real
     // Walrus + Nautilus-mock calls. See orchestrator.ts for exactly which
     // steps are genuinely on-chain vs. still scripted, and why.
-    runOrchestratedDeal(goal, account?.address, {
+    runOrchestratedDeal(goal, account?.address, onboarding, {
       onStepsChange: (nextSteps) => {
         setSteps(nextSteps);
         const found = nextSteps.find((s) => s.id === "candidate-found");
@@ -141,7 +150,12 @@ export function App() {
       <AnimatePresence mode="wait">
         {screen === "onboarding" && (
           <ScreenTransition key="onboarding">
-            <Onboarding onComplete={() => setScreen("dashboard")} />
+            <Onboarding
+              onComplete={(result) => {
+                setOnboarding(result);
+                setScreen("dashboard");
+              }}
+            />
           </ScreenTransition>
         )}
         {screen === "dashboard" && (

@@ -24,29 +24,37 @@
 //      (ptb-escrow.ts). Requires: a real Mandate object owned by the
 //      connected account, with enough custodied `funds` and an
 //      `allowed_categories` entry matching step 2's category exactly
-//      (case-sensitive — see llm.ts's comment on why this matters).
-//      There is currently no UI to create a Mandate, so this step will
-//      genuinely fail for any account that doesn't have one already —
-//      surfaced as a real error, not swallowed.
+//      (case-sensitive — see llm.ts's comment on why this matters). The
+//      client's AgentIdentity/Reputation IDs come from the `onboarding`
+//      param (Onboarding.tsx), not the connected address — an address is
+//      not an object ID, and an earlier version of this file conflated
+//      the two (confirmed live bug, fixed alongside Onboarding.tsx).
+//      There is currently no UI to create a Mandate other than the
+//      Onboarding screen, so this step will genuinely fail for any
+//      account that skipped it — surfaced as a real error, not swallowed.
 //   4. work-in-progress — REAL: Walrus storeBlob() (unchanged from
 //      demoStatusSequence.ts, already verified live).
 //   5. verification — REAL: Nautilus mockNautilusAttest() (unchanged,
 //      already verified live, honestly labeled mocked).
 //   6. payment-released / reputation-updated — REAL PTBs: accept
 //      (ptb-accept.ts), mark_delivered (ptb-deliver.ts), then
-//      verify_and_release (ptb-release.ts). Same funded-wallet
-//      requirement as step 3.
+//      verify_and_release (ptb-release.ts, using onboarding.clientAgent's
+//      IDs and the discovered candidate's real reputationId — see
+//      discovery.ts). Same funded-wallet requirement as step 3.
 
 import { dAppKit } from "../sui/dapp-kit";
 import { discoverAgents } from "../agent/discovery";
 import { interpretGoal } from "../agent/llm";
 import { scriptedSpecialistReply, scriptedDeliverable } from "../agent/specialist-stand-ins";
 import { storeBlob } from "../verification/walrus";
+import { encryptDealContent } from "../verification/seal";
 import { mockNautilusAttest } from "../verification/nautilus.mock";
 import { buildLockEscrowAndCreateDealTx, extractDealIdFromResult } from "../sui/ptb-escrow";
+import { buildCreateDealAllowlistTx, extractAllowlistIdFromEffects } from "../sui/ptb-deal-access";
 import { buildAcceptDealTx } from "../sui/ptb-accept";
 import { buildMarkDeliveredTx } from "../sui/ptb-deliver";
 import { buildVerifyAndReleaseTx } from "../sui/ptb-release";
+import type { OnboardingResult } from "./Onboarding";
 import type { DealReceipt, StatusStep } from "./types";
 
 const STEP_DELAY_MS = 400;
@@ -58,6 +66,7 @@ function wait(ms: number): Promise<void> {
 export async function runOrchestratedDeal(
   goal: string,
   connectedAddress: string | undefined,
+  onboarding: OnboardingResult,
   handlers: {
     onStepsChange: (steps: StatusStep[]) => void;
     onComplete: (receipt: DealReceipt) => void;
@@ -150,7 +159,7 @@ export async function runOrchestratedDeal(
   try {
     const tx = buildLockEscrowAndCreateDealTx({
       mandateId,
-      clientAgentIdentityId: connectedAddress, // VERIFY: this should be the client's AgentIdentity object id, not their address — no client AgentIdentity exists yet either. Flagged, not silently guessed.
+      clientAgentIdentityId: onboarding.clientAgent.agentId,
       specialistAgentId: candidate.agentId,
       category: interpreted.category,
       amount: BigInt(Math.round(interpreted.maxBudget * 1_000_000_000)),
@@ -173,21 +182,57 @@ export async function runOrchestratedDeal(
   steps[4].state = "done";
   steps[4].detail = `Deal ${dealId} created and escrowed on-chain`;
   steps[5].state = "active";
-  steps[5].detail = "Uploading to Walrus testnet — this can take several seconds.";
+  steps[5].detail = "Setting up Seal access control for the deliverable…";
   emit();
 
-  // --- Step 5: REAL Walrus storage --------------------------------------
+  // --- REAL PTB: create the Seal DealAllowlist for this Deal -----------
+  // Must happen after the Deal exists (deal_access::new_for_deal reads the
+  // Deal's party owners) and before encrypting the deliverable (encryption
+  // needs the allowlist's object id as the Seal identity namespace) — see
+  // seal.ts's file header for the full design-gap note this resolves for
+  // the deliverable (step 8), as opposed to pre-Deal negotiation content.
+  let allowlistId: string;
+  try {
+    const allowlistTx = buildCreateDealAllowlistTx({ dealId });
+    const allowlistResult = await dAppKit.signAndExecuteTransaction({ transaction: allowlistTx });
+    if (allowlistResult.FailedTransaction) {
+      throw new Error(allowlistResult.FailedTransaction.status.error?.message ?? "Allowlist creation failed");
+    }
+    const extracted = extractAllowlistIdFromEffects(allowlistResult.Transaction.effects);
+    if (!extracted) {
+      throw new Error("new_and_share succeeded but no newly-created shared object was found in its effects.");
+    }
+    allowlistId = extracted;
+  } catch (err) {
+    fail(5, `Seal allowlist setup failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  steps[5].state = "active";
+  steps[5].detail = "Encrypting deliverable with Seal, then uploading to Walrus testnet…";
+  emit();
+
+  // --- Step 5: REAL Seal encryption + Walrus storage --------------------
+  // Genuinely encrypted, not stored in the clear: only the client and
+  // specialist owner addresses on this Deal's DealAllowlist can ever
+  // decrypt this blob (see verification/seal.ts).
   const deliverable = scriptedDeliverable(goal, interpreted.category);
   let blobId: string;
+  let seedId: string;
   try {
-    const stored = await storeBlob(deliverable.content);
+    const encrypted = await encryptDealContent(
+      new TextEncoder().encode(deliverable.content),
+      dAppKit.getClient(),
+      allowlistId,
+    );
+    seedId = encrypted.seedId;
+    const stored = await storeBlob(encrypted.encryptedObject);
     blobId = stored.blobId;
   } catch (err) {
-    fail(5, `Walrus storage failed: ${err instanceof Error ? err.message : String(err)}`);
+    fail(5, `Seal encryption / Walrus storage failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   steps[5].state = "done";
-  steps[5].detail = `Stored on Walrus · blob ${blobId}`;
+  steps[5].detail = `Encrypted with Seal · stored on Walrus · blob ${blobId}`;
   steps[6].state = "active";
   emit();
 
@@ -219,9 +264,9 @@ export async function runOrchestratedDeal(
 
     const releaseTx = buildVerifyAndReleaseTx({
       dealId,
-      clientAgentIdentityId: connectedAddress, // same VERIFY caveat as above
-      clientReputationId: "", // VERIFY: no client Reputation object exists — this cannot succeed until AgentIdentity/Reputation onboarding exists
-      specialistReputationId: candidate.agentId, // placeholder — needs the specialist's actual reputation_id, not agentId
+      clientAgentIdentityId: onboarding.clientAgent.agentId,
+      clientReputationId: onboarding.clientAgent.reputationId,
+      specialistReputationId: candidate.reputationId,
     });
     const releaseResult = await dAppKit.signAndExecuteTransaction({ transaction: releaseTx });
     if (releaseResult.FailedTransaction) {
@@ -244,5 +289,6 @@ export async function runOrchestratedDeal(
     amount: interpreted.maxBudget,
     counterpartyName: candidate.suinsName,
     verification: { mocked: attestation.mocked, attestationId: attestation.attestationId },
+    deliverable: { blobId, allowlistId, seedId },
   });
 }
