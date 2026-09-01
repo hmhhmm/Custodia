@@ -1,12 +1,143 @@
 // Owner: Person 4 (frontend + orchestration).
-// STATUS: stub only — no working logic yet.
+// STATUS: real implementation, reading the live AgentRegistry on Sui
+// testnet.
 //
-// Agent discovery/matching: given an interpreted goal, finds candidate
-// specialist AgentIdentity objects (by capabilities + Reputation score).
-// TBD — exact on-chain query pattern (event indexing vs. direct object
-// queries) once Person 1's Move package is deployed to testnet.
+// Verified this session against the actual GraphQL schema (introspected
+// live at https://graphql.testnet.sui.io/graphql, not assumed) and a
+// live test query — `multiGetObjects(keys: [{address}])` is real and
+// confirmed working. Also independently confirmed via a direct query
+// that the deployed AgentRegistry at VITE_AGENT_REGISTRY_ID currently
+// has ZERO registered agents (`"agents": []`) — this is not a bug in
+// this file, it is the genuine on-chain state. discoverAgents() returning
+// an empty array against the real registry today is the correct,
+// truthful result, not a broken query. Someone must call
+// `agent_identity::register_and_keep` to register a demo agent before
+// this can return real candidates.
 
-// TODO: export async function discoverAgents(params: {
-//   category: string;
-//   minReputationScore?: number;
-// }): Promise<Array<{ agentId: string; suinsName: string; score: number }>>
+import { SuiGraphQLClient } from "@mysten/sui/graphql";
+import { graphql } from "@mysten/sui/graphql/schema";
+
+const GRAPHQL_URL = "https://graphql.testnet.sui.io/graphql";
+
+const AGENT_REGISTRY_ID: string =
+  import.meta.env.VITE_AGENT_REGISTRY_ID ??
+  "0xf42821c47c23e96967bdc04b4265f38f7c92697bb966204205aff3a7d8e214e4";
+
+const client = new SuiGraphQLClient({ url: GRAPHQL_URL, network: "testnet" });
+
+const GetRegistryQuery = graphql(`
+  query GetAgentRegistry($registryId: SuiAddress!) {
+    object(address: $registryId) {
+      asMoveObject {
+        contents {
+          json
+        }
+      }
+    }
+  }
+`);
+
+const MultiGetReputationsQuery = graphql(`
+  query MultiGetReputations($keys: [ObjectKey!]!) {
+    multiGetObjects(keys: $keys) {
+      address
+      asMoveObject {
+        contents {
+          json
+        }
+      }
+    }
+  }
+`);
+
+/** Mirrors custodia::agent_identity::AgentSummary — field names match the
+ * Move struct exactly, since GraphQL's `contents.json` serializes struct
+ * fields verbatim. */
+interface AgentSummaryJson {
+  agent_id: string;
+  owner: string;
+  suins_name: string;
+  capabilities: string[];
+  reputation_id: string;
+  /** Always false today — see agent_identity.move's own comment on why
+   * this must render an "unverified" badge, not be treated as a real
+   * ownership proof. */
+  name_verified: boolean;
+}
+
+export interface DiscoveredAgent {
+  agentId: string;
+  suinsName: string;
+  nameVerified: boolean;
+  capabilities: string[];
+  reputationScore: number;
+}
+
+/**
+ * Reads the live on-chain AgentRegistry and ranks candidates by
+ * reputation score, optionally filtered by capability. Returns an empty
+ * array (not an error, not fake data) if no agents are registered or
+ * none match — see file header for why the registry is empty today.
+ */
+export async function discoverAgents(params: {
+  capability?: string;
+  minReputationScore?: number;
+}): Promise<DiscoveredAgent[]> {
+  const registryResult = await client.query({
+    query: GetRegistryQuery,
+    variables: { registryId: AGENT_REGISTRY_ID },
+  });
+
+  if (registryResult.errors?.length) {
+    throw new Error(`AgentRegistry query failed: ${JSON.stringify(registryResult.errors)}`);
+  }
+
+  const registryJson = registryResult.data?.object?.asMoveObject?.contents?.json as
+    | { agents: AgentSummaryJson[] }
+    | undefined;
+
+  const agents = registryJson?.agents ?? [];
+  if (agents.length === 0) {
+    return [];
+  }
+
+  const filtered = params.capability
+    ? agents.filter((a) => a.capabilities.includes(params.capability!))
+    : agents;
+
+  if (filtered.length === 0) {
+    return [];
+  }
+
+  const reputationResult = await client.query({
+    query: MultiGetReputationsQuery,
+    variables: { keys: filtered.map((a) => ({ address: a.reputation_id })) },
+  });
+
+  if (reputationResult.errors?.length) {
+    throw new Error(`Reputation batch query failed: ${JSON.stringify(reputationResult.errors)}`);
+  }
+
+  const scoreByObjectAddress = new Map<string, number>();
+  for (const obj of reputationResult.data?.multiGetObjects ?? []) {
+    const json = obj?.asMoveObject?.contents?.json as { score?: number } | undefined;
+    if (obj?.address && typeof json?.score === "number") {
+      scoreByObjectAddress.set(obj.address, json.score);
+    }
+  }
+
+  const candidates: DiscoveredAgent[] = filtered.map((a) => ({
+    agentId: a.agent_id,
+    suinsName: a.suins_name,
+    nameVerified: a.name_verified,
+    capabilities: a.capabilities,
+    reputationScore: scoreByObjectAddress.get(a.reputation_id) ?? 0,
+  }));
+
+  const aboveThreshold =
+    params.minReputationScore !== undefined
+      ? candidates.filter((c) => c.reputationScore >= params.minReputationScore!)
+      : candidates;
+
+  return aboveThreshold.sort((a, b) => b.reputationScore - a.reputationScore);
+}
