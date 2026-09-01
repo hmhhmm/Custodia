@@ -390,3 +390,63 @@ instead of React-specific components — this changes how
 `frontend/src/sui/WalletConnect.tsx` needs to be built. See that file's
 header comment for detail.
 instead.
+
+## Person 4 wiring status (2026-09-01)
+
+Real wallet connect, real Gemini goal parsing, real on-chain discovery,
+and a full orchestrator chaining every real PTB were built and verified
+this session. Being specific about what "wired" means here, since it is
+not the same as "runs end-to-end successfully today":
+
+**Genuinely real and independently verified live, not guessed:**
+- `frontend/src/agent/llm.ts` — real Gemini REST call (`gemini-3.7-flash`,
+  verified against official docs across three separate fetches after one
+  fetch returned an implausible endpoint shape).
+- `frontend/src/agent/discovery.ts` — real GraphQL read against the live
+  `AgentRegistry`, live-tested from a throwaway script. **The registry
+  currently has zero registered agents** (confirmed via direct GraphQL
+  query) — this is real on-chain state, not a bug in the query.
+- `frontend/src/app/Landing.tsx` now renders the real `ConnectButton` —
+  screenshotted opening a genuine "Connect a wallet" modal that detected
+  a real installed wallet type (Slush), not a mock.
+- New PTB builders: `ptb-accept.ts`, `ptb-deliver.ts` (chains
+  `proof::new_simulated` → `mark_delivered` → `proof::share_proof` in one
+  PTB, using the verified command-chaining pattern from the `ptbs`
+  skill), `ptb-mandate.ts`, `ptb-register-agent.ts` — none of these
+  existed before; PTB #1/#2 alone were not a complete chain.
+- `frontend/src/app/orchestrator.ts` — replaces `demoStatusSequence.ts`
+  as the thing `App.tsx` actually calls, chaining real discovery → real
+  Gemini → real PTB #1 → real Walrus → real Nautilus-mock → real
+  accept/deliver/release PTBs.
+- `frontend/src/app/Onboarding.tsx` — new screen, first thing an
+  authenticated user sees, for registering a client `AgentIdentity` and
+  creating a funded `Mandate` — neither existed anywhere before.
+
+**Cannot be exercised end-to-end from this session, and why — not a
+code defect, a real external blocker:**
+- The Sui testnet faucet rate-limited this environment's IP for the
+  entire session (both the raw HTTP endpoint and the SDK's
+  `requestSuiFromFaucetV2` — same block, confirming it is IP-based, not
+  a code issue). No demo wallet could be funded, so no PTB was ever
+  actually submitted and confirmed on-chain this session.
+- Even once funded, `orchestrator.ts`'s own inline comments flag two
+  real unresolved gaps: PTB #1's `client_agent` argument needs a real
+  `AgentIdentity` object ID (Onboarding.tsx registers one, but the
+  orchestrator was written before that flow existed and still passes the
+  raw wallet address as a placeholder — this needs reconciling), and PTB
+  #2's `clientReputationId` has no real source yet (the client's own
+  `Reputation` object ID isn't captured anywhere after registration).
+- The `AgentRegistry` having zero agents means `Onboarding.tsx`'s
+  "register a demo specialist" step must actually be run — by a real
+  funded wallet — before discovery step 1 in `orchestrator.ts` can ever
+  find a candidate.
+
+**Bottom line:** the wiring is real and each individual piece has been
+verified against live testnet state or a live successful call. The full
+chain has not completed a single live run this session, because doing so
+requires testnet SUI this session could not obtain. The next concrete
+step is: fund a real wallet (faucet, once its rate limit clears, or a
+manual transfer), walk through `Onboarding.tsx` with it, fix the
+`clientAgentIdentityId`/`clientReputationId` placeholders in
+`orchestrator.ts` to use the IDs `Onboarding.tsx` produces, then run a
+real deal through to completion and record the result here.
