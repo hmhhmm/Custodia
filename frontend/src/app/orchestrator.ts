@@ -153,7 +153,7 @@ export async function runOrchestratedDeal(
     if (result.FailedTransaction) {
       throw new Error(result.FailedTransaction.status.error?.message ?? "PTB #1 failed");
     }
-    const extracted = extractDealIdFromResult(result.Transaction ?? {});
+    const extracted = await extractDealIdFromResult(dAppKit.getClient(), result);
     if (!extracted) {
       throw new Error("create_and_share succeeded but no DealCreated event was found in the result.");
     }

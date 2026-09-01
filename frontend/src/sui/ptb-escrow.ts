@@ -2,8 +2,10 @@
 // custodia::deal::create_and_share.
 
 import { Transaction } from "@mysten/sui/transactions";
+import type { DAppKitCompatibleClient } from "@mysten/dapp-kit-core";
+import type { SuiClientTypes } from "@mysten/sui/client";
 import { PACKAGE_ID, AGENT_REGISTRY_ID } from "./config";
-import { findEvent, type TxResultWithEvents } from "./events";
+import { findEvent, fetchTransactionEvents } from "./events";
 
 export function buildLockEscrowAndCreateDealTx(params: {
   mandateId: string;
@@ -36,7 +38,16 @@ export function buildLockEscrowAndCreateDealTx(params: {
   return tx;
 }
 
-export function extractDealIdFromResult(result: TxResultWithEvents): string | null {
-  const parsed = findEvent<{ deal_id?: string }>(result, "::deal::DealCreated");
+/**
+ * Reads deal_id off DealCreated. Events aren't present on the
+ * signAndExecuteTransaction result itself — this waits for the fullnode to
+ * index the transaction first (see events.ts).
+ */
+export async function extractDealIdFromResult(
+  client: DAppKitCompatibleClient,
+  result: SuiClientTypes.TransactionResult,
+): Promise<string | null> {
+  const withEvents = await fetchTransactionEvents(client, result);
+  const parsed = findEvent<{ deal_id?: string }>(withEvents, "::deal::DealCreated");
   return parsed?.deal_id ?? null;
 }
