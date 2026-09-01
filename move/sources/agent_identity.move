@@ -6,8 +6,8 @@
 //
 // AgentIdentity itself is `key, store` and owned by the agent's controller.
 // AgentRegistry is a shared object that indexes every registered agent so
-// Person 4's `discoverAgents()` (frontend/src/agent/discovery.ts) can find
-// candidates by capability and reputation in a single object read.
+// `discoverAgents()` (frontend/src/agent/discovery.ts) can find candidates
+// by capability and reputation in a single object read.
 module custodia::agent_identity;
 
 use std::string::String;
@@ -89,7 +89,7 @@ public struct AgentSummary has store, copy, drop {
     /// cuts the other way too: first-come-first-served with no deregistration
     /// means a squatter holds a name irrecoverably.
     ///
-    /// Person 4's discovery MUST render an "unverified" badge while this is
+    /// Any discovery UI MUST render an "unverified" badge while this is
     /// false, so the UI never presents a self-asserted label as an identity
     /// claim. The field exists now because struct fields freeze at publish and
     /// adding it later would cost another breaking republish.
@@ -106,7 +106,7 @@ public struct AgentSummary has store, copy, drop {
 /// DEMO-SCALE DECISION, stated plainly: `agents` is a plain vector, and the
 /// `sui-move-project` skill explicitly warns "avoid ever-growing vectors
 /// inside objects" (objects cap at 256 KB). It is used anyway because it lets
-/// Person 4 read every agent in one call with no indexer, and the demo has
+/// discovery read every agent in one call with no indexer, and the demo has
 /// 2-3 agents. This does NOT survive real scale — the roadmap answer is to
 /// consume the `AgentRegistered` events below via an off-chain indexer and
 /// drop the vector. Do not present this as a production registry.
@@ -157,7 +157,8 @@ fun init(ctx: &mut TxContext) {
 /// SuiNS ownership — nothing here proves the registrant controls that name.
 /// Uniqueness alone stops the cheapest impersonation (registering the exact
 /// name of a known agent and being indistinguishable in discovery); proving
-/// ownership needs a real SuiNS lookup, which is Person 2's surface.
+/// ownership needs a real SuiNS lookup (frontend/src/sui/suins.ts, not yet
+/// built).
 public fun register(
     registry: &mut AgentRegistry,
     suins_name: String,
@@ -263,17 +264,14 @@ public fun transfer_ownership(
 /// not use the NFT as a *resolution* method (which the SuiNS docs warn against),
 /// only as the ownership capability it is.
 ///
-/// The API was verified against the suins-contracts source this session, per
-/// /CLAUDE.md rule 1: `suins::suins_registration::SuinsRegistration` with
+/// API: `suins::suins_registration::SuinsRegistration` with
 /// `domain_name(): String` and `expiration_timestamp_ms(): u64`.
 ///
 /// Normalisation requirement, worth stating because it is the one sharp edge:
 /// `domain_name()` returns the full SuiNS name (e.g. "alice.sui"), so an agent
-/// gets verified only if it registered its `suins_name` as exactly that string.
-/// Person 4's registration UI should store the full ".sui" name, not a bare
-/// label. This is a coordination point with Person 2, who owns SuiNS
-/// registration — the Move check is Person 1's, the name it checks against is
-/// set at registration time.
+/// gets verified only if it registered its `suins_name` as exactly that
+/// string — any registration UI must store the full ".sui" name, not a bare
+/// label.
 ///
 /// A byte-string equality, not SuiNS's own normalisation. If a name has a
 /// canonical form that differs from what was stored, this rejects it — correct
@@ -341,7 +339,7 @@ public fun reputation_id(identity: &AgentIdentity): ID {
     identity.reputation_id
 }
 
-/// Every registered agent. Person 4's discovery filters this client-side by
+/// Every registered agent. discovery.ts filters this client-side by
 /// capability, then ranks by each agent's Reputation score.
 public fun agents(registry: &AgentRegistry): vector<AgentSummary> {
     registry.agents

@@ -1,10 +1,7 @@
-// Owner: Person 4 (frontend + orchestration).
-//
 // Goal input — reached via the dashboard's "+ New deal" action, not a
 // standalone screen. Stays deliberately minimal: one field, one action.
-// Feeds into src/agent's real discovery/matching logic (llm.ts's Gemini
-// call and discovery.ts's live on-chain AgentRegistry query — see
-// /frontend/src/agent/ and orchestrator.ts).
+// The submitted goal is passed up to App.tsx, which feeds it into
+// orchestrator.ts's real discovery/matching logic.
 
 import { useState } from "react";
 

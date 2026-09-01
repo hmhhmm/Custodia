@@ -1,20 +1,10 @@
-// Owner: Person 3 (verification/storage) — added to Person 1's /move/
-// package rather than a separate Move package, since it must be published
-// alongside `custodia::deal` for the package ID used in Seal's
-// `seal_approve` moveCall target to be meaningful. Coordinate with
-// Person 1 before renaming/moving this module.
+// Owner: Person 1 (Move/contracts), published alongside custodia::deal so
+// the package ID used in Seal's `seal_approve` moveCall target is meaningful.
 //
 // Seal access-control policy for a Deal's encrypted content: an allowlist of
 // exactly the two parties' owner addresses, modeled on the Seal "whitelist"
 // reference pattern
-// (https://github.com/MystenLabs/seal/blob/main/move/patterns/sources/whitelist.move).
-// The simplest viable policy — do not add a more complex access model without
-// flagging it, per /docs/ARCHITECTURE.md's scope rules.
-//
-// IMPLEMENTED 2026-08-31 by Person 1 at Person 3's/the team's explicit
-// request (rule 4 boundary crossed with authorization, not silently). The
-// Seal convention below was VERIFIED against the whitelist.move source this
-// session, per /CLAUDE.md rule 1 — not assumed:
+// (https://github.com/MystenLabs/seal/blob/main/move/patterns/sources/whitelist.move):
 //   - `entry fun seal_approve(id: vector<u8>, <policy>, ctx)` aborts (does not
 //     return) when access is denied; the key server evaluates it via
 //     dry_run_transaction_block.
@@ -22,12 +12,11 @@
 //     asserts `id` is prefixed by this object's own id bytes.
 //   - membership is a plain containment check.
 //
-// DESIGN GAP still owned by Person 3, unchanged by this implementation: a
-// DealAllowlist is keyed to a Deal, which does not exist until PTB #1 (step 6),
-// while negotiation content is encrypted at step 4. So this policy fits the
-// DELIVERABLE (step 8, after the Deal exists), not step-4 negotiation. A
-// pre-Deal `NegotiationSession` object would be needed for step 4 — flagged,
-// not built.
+// DESIGN GAP: a DealAllowlist is keyed to a Deal, which does not exist until
+// PTB #1 (step 6), while negotiation content is encrypted at step 4. So this
+// policy fits the DELIVERABLE (step 8, after the Deal exists), not step-4
+// negotiation. A pre-Deal `NegotiationSession` object would be needed for
+// step 4 — not built.
 module custodia::deal_access;
 
 use custodia::agent_identity::AgentRegistry;

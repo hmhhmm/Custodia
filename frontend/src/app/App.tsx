@@ -1,11 +1,8 @@
-// Owner: Person 4 (frontend + orchestration).
-//
-// Top-level screen router for the Envoy UI. Dashboard-first structure:
-// the persistent AppShell wraps every screen, and "New deal" is an
-// action reached from the dashboard rather than a standalone flow — see
-// the design brief's "must read as real software" requirement. Auth is a
-// minimal gate before the shell renders (Person 2 owns the real zkLogin
-// wiring; this is a placeholder callback).
+// Top-level screen router for the Custodia UI. Dashboard-first structure:
+// the persistent AppShell wraps every screen, and "New deal" is an action
+// reached from the dashboard rather than a standalone flow. Auth is a
+// minimal gate before the shell renders (real zkLogin sign-in is not yet
+// wired; wallet connect via Landing's ConnectButton is the real path in).
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
@@ -82,18 +79,13 @@ export function App() {
   function handleGoalSubmit(goal: string) {
     if (!onboarding) {
       // Should be unreachable — GoalInput is only rendered after
-      // onboarding completes — but guard rather than silently pass
-      // undefined IDs into the orchestrator (that was the exact class of
-      // bug found by this session's audit: unverified IDs quietly
-      // substituted with something wrong).
+      // onboarding completes — but guard rather than pass undefined IDs
+      // into the orchestrator.
       return;
     }
     setScreen("status");
     setCurrentGoal({ description: goal });
-    // Real orchestration: calls Gemini (llm.ts), on-chain discovery
-    // (discovery.ts), the real PTBs (sui/ptb-*.ts), and Person 3's real
-    // Walrus + Nautilus-mock calls. See orchestrator.ts for exactly which
-    // steps are genuinely on-chain vs. still scripted, and why.
+    // See orchestrator.ts for exactly which steps are on-chain vs. scripted.
     runOrchestratedDeal(goal, account?.address, onboarding, {
       onStepsChange: (nextSteps) => {
         setSteps(nextSteps);
@@ -119,10 +111,8 @@ export function App() {
           counterpartyName: receipt.counterpartyName,
           amount: receipt.amount,
           status: "released",
-          // PROPOSED: category/description shown on the deal card don't
-          // yet have a real on-chain source — see /docs/ARCHITECTURE.md's
-          // Mandate.allowed_categories field for where "category" should
-          // eventually come from. Falling back to the raw goal text here.
+          // The deal card's category doesn't yet have a real on-chain
+          // source; falling back to a generic label and the raw goal text.
           category: "General",
           description: currentGoal?.description ?? "",
         },
@@ -136,12 +126,10 @@ export function App() {
   }
 
   if (!authenticated) {
-    // onSignIn is now a no-op for the secondary CTAs (footer, closing
-    // section) — the real connect action lives in Landing's hero
-    // ConnectButton. Clicking those secondary buttons currently does
-    // nothing; scrolling to the hero's real ConnectButton is the actual
-    // path to sign in. TODO: wire the secondary CTAs to scroll-into-view
-    // the hero ConnectButton, or render a ConnectButton there too.
+    // onSignIn is a no-op for the secondary CTAs (footer, closing section)
+    // — the real connect action lives in Landing's hero ConnectButton.
+    // TODO: wire the secondary CTAs to scroll-into-view the hero
+    // ConnectButton, or render a ConnectButton there too.
     return <Landing onSignIn={() => {}} />;
   }
 

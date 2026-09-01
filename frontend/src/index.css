@@ -6,10 +6,10 @@
 @import "tailwindcss";
 
 /*
- * Design tokens for the Escrow / Envoy UI — modern dark SaaS register
- * (Vercel/Linear/Raycast-style), per direct design feedback: true neutral
- * grayscale (no warm undertone), crisp white text, a single accent color
- * used sparingly (Vercel's own blue), Geist Sans/Mono typography.
+ * Design tokens for the Custodia UI — modern dark SaaS register
+ * (Vercel/Linear/Raycast-style): true neutral grayscale (no warm
+ * undertone), crisp white text, a single accent color used sparingly,
+ * Geist Sans/Mono typography.
  *
  * The wax-seal signature moment (escrow-lock / verified-release, see
  * components/Seal.tsx) keeps its own warm accent colors intentionally —

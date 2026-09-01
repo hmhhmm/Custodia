@@ -1,22 +1,12 @@
-// Owner: Person 4 (frontend + orchestration).
-// STATUS: real implementation against the Gemini REST API.
-//
-// Verified this session against https://ai.google.dev/api/generate-content
-// and https://ai.google.dev/gemini-api/docs/models — confirmed the exact
-// REST shape (POST .../v1beta/{model}:generateContent, body
-// { contents: [{ parts: [{ text }] }] }) and the current model name
-// (gemini-3.7-flash) against official docs, cross-checked across three
-// separate fetches after one fetch returned an inconsistent/implausible
-// endpoint shape on the first try — do not trust a single fetch for an
-// API surface, especially one this easy to hallucinate plausibly.
+// Parses a plain-language goal into a structured task via the Gemini REST
+// API (POST .../v1beta/{model}:generateContent).
 //
 // CATEGORY LIST IS NOT ARBITRARY: it must exact-match, case-sensitively,
 // whatever a real on-chain Mandate's `allowed_categories` contains —
 // `mandate::assert_within_mandate` aborts with ECategoryNotAllowed on any
-// mismatch (verified against move/tests/mandate_tests.move, which uses
-// "legal-review" and "courier"). The categories below match the demo
-// Mandate's categories in demoStatusSequence.ts — if that list changes,
-// this one must change with it, or every real PTB #1 call aborts.
+// mismatch. The categories below must match Onboarding.tsx's
+// `allowedCategories` when it creates a Mandate — if one changes, the
+// other must change with it, or every real PTB #1 call aborts.
 
 const GEMINI_API_KEY: string | undefined = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_MODEL = "gemini-3.7-flash";

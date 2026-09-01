@@ -1,14 +1,10 @@
-// Owner: Person 4 (frontend + orchestration).
-//
 // Dashboard / home screen — the app's resting state, reached inside the
-// persistent shell (see AppShell.tsx). Always shows real state: a real
-// grid of past/active deal cards, or, on first use, a written empty
-// state. Never a blank screen. Cards (icon avatar, category tag, title,
-// description, status) intentionally mirror a familiar
-// marketplace/integrations-grid pattern, per direct design feedback,
-// rather than the plain ledger-line list from the previous pass — the
-// wax-seal signature moment (StatusFeed / Receipt) still carries the
-// ledger/seal metaphor, this screen prioritizes at-a-glance scanning.
+// persistent shell (see AppShell.tsx). Shows a grid of past/active deal
+// cards, or, on first use, a written empty state. Cards (icon avatar,
+// category tag, title, description, status) mirror a familiar
+// marketplace/integrations-grid pattern; the wax-seal signature moment
+// (StatusFeed / Receipt) carries the ledger/seal metaphor instead, since
+// this screen prioritizes at-a-glance scanning.
 
 import type { DealSummary, DealSummaryStatus } from "./types";
 

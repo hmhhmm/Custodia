@@ -1,12 +1,6 @@
-// Owner: Person 4 (frontend + orchestration).
-//
-// Shared UI-layer types for the Envoy screens. These describe what the
-// UI needs to RENDER, not the on-chain Deal/Mandate shapes themselves —
-// see /docs/ARCHITECTURE.md for the real Move object fields (still
-// PROPOSED/TBD in several places) and /frontend/src/verification/proof.ts
-// for the PROPOSED proof_ref format. Do not assume these UI types map
-// 1:1 onto the eventual on-chain structs; a mapping/adapter layer will be
-// needed once Person 1/2's real types are confirmed.
+// Shared UI-layer types for the Custodia screens. These describe what the
+// UI needs to render, not the on-chain Deal/Mandate shapes themselves —
+// see /docs/ARCHITECTURE.md for the real Move object fields.
 
 export type StatusStepId =
   | "searching"
@@ -27,13 +21,6 @@ export interface CandidateInfo {
   reputationScore: number;
 }
 
-export interface MandateSnapshot {
-  maxSpend: number;
-  spentSoFar: number;
-  allowedCategories: string[];
-  expiresAt: string;
-}
-
 export interface VerificationInfo {
   /** Mirrors nautilus.mock.ts's MockAttestation.mocked — MUST be surfaced
    * in the UI per the design direction: never present a simulated
@@ -48,8 +35,8 @@ export interface StatusStep {
   /** Short human-readable label, e.g. "Custodia locked". */
   label: string;
   /** Optional detail shown once the step is active/done — e.g. the
-   * candidate's name+score, the Mandate snapshot, or verification info. */
-  detail?: CandidateInfo | MandateSnapshot | VerificationInfo | string;
+   * candidate's name+score or verification info. */
+  detail?: CandidateInfo | VerificationInfo | string;
 }
 
 export interface DealReceipt {
@@ -80,8 +67,7 @@ export interface DealSummary {
   amount: number;
   status: DealSummaryStatus;
   /** Category tag shown on the deal card, e.g. "Legal", "Logistics" —
-   * mirrors Mandate.allowed_categories vocabulary once that's wired to
-   * real data (see /docs/ARCHITECTURE.md — still PROPOSED). */
+   * mirrors Mandate.allowed_categories vocabulary. */
   category: string;
   /** Short one-line description of what the deal is for, shown on the
    * card below the counterparty name. */

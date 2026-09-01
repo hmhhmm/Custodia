@@ -1,20 +1,10 @@
-// Owner: Person 4 (frontend + orchestration).
-//
-// Marketing/landing page shown before sign-in. Modern black SaaS
-// register — true neutral grayscale, crisp white primary actions —
-// matching Vercel's home page design language per direct design
-// feedback. Built natively on this project's actual stack (Vite +
-// Tailwind + the `motion` package already in use elsewhere in the app)
-// rather than pulling in a second animation library or a Next.js/shadcn
-// component tree that doesn't match this project's setup.
+// Marketing/landing page shown before sign-in. Modern black SaaS register
+// — true neutral grayscale, crisp white primary actions.
 //
 // Layout: a single wide container (max-w-7xl) with consistent horizontal
 // padding, sections in a plain top-to-bottom flow, and every card grid
 // using items-stretch + h-full so cards in the same row match height
-// regardless of how much their copy wraps — the earlier pass's sticky
-// scroll-stack looked distinctive but produced inconsistent card heights
-// and a messy reading order, so it's been dropped in favor of a simpler,
-// more legible structure per direct feedback.
+// regardless of how much their copy wraps.
 //
 // Motion: a staggered blur-in hero entrance, an ambient radial glow
 // behind the hero (pure CSS, no image asset), and a shrink-on-scroll
@@ -234,10 +224,9 @@ const BUILT_ON_SUI_ITEMS = [
 
 /**
  * Floating header: full-width and flush against the top on first paint,
- * then — once the user scrolls past a threshold — the bar animates into
- * a narrower, rounded, blurred floating pill (width and corner radius
- * only; the logo stays a constant size throughout, per direct feedback
- * that the size change read as unnecessary). Tracked via a native scroll
+ * then — once the user scrolls past a threshold — the bar animates into a
+ * narrower, rounded, blurred floating pill (width and corner radius only;
+ * the logo stays a constant size throughout). Tracked via a native scroll
  * listener, animated with `motion`.
  */
 function FloatingHeader({ onSignIn }: { onSignIn: () => void }) {
@@ -407,7 +396,7 @@ function ClosingCta({ onSignIn }: { onSignIn: () => void }) {
         onClick={onSignIn}
         className="mt-6 rounded-md bg-white px-6 py-3 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
-        Continue with Google
+        Connect wallet
       </button>
     </section>
   );

@@ -12,15 +12,12 @@ module custodia::reputation;
 
 use sui::event;
 
-/// PROPOSED — score for an agent with no completed and no disputed deals.
-/// 0-100 scale, chosen to match what Person 4's UI already renders
-/// (`CandidateInfo.reputationScore` in frontend/src/app/types.ts).
+/// Score for an agent with no completed and no disputed deals. 0-100 scale,
+/// chosen to match `CandidateInfo.reputationScore` in
+/// frontend/src/app/types.ts.
 ///
-/// /docs/ARCHITECTURE.md flags the scoring formula as needing team
-/// confirmation. This is a concrete PROPOSED formula so the package can be
-/// built and deployed — it is deliberately trivial to change: only
-/// `recalculate` below and this constant need editing. Confirm with the team
-/// before Person 4's discovery ranking depends on the exact numbers.
+/// Deliberately trivial to change: only `recalculate` below and this
+/// constant need editing if the scoring formula is revised.
 const COLD_START_SCORE: u64 = 50;
 
 /// Maximum score, i.e. an agent with completed deals and zero disputes.
@@ -30,7 +27,7 @@ const MAX_SCORE: u64 = 100;
 /// score. Without it the formula has a one-deal cliff: a brand-new agent with a
 /// single completed deal scores a perfect 100 and outranks an agent with 999
 /// completed and 1 disputed (99). That made a single self-dealt, zero-value
-/// deal the cheapest way to top Person 4's discovery ranking.
+/// deal the cheapest way to top discovery's reputation ranking.
 ///
 /// With the prior, one completion scores 58 and the score approaches 100 only
 /// with real volume, so a forged record buys almost nothing. Cold start is
@@ -63,14 +60,13 @@ public struct ReputationUpdated has copy, drop {
 /// alone sees the cold-start score. Every later change emits the same event, so
 /// the event stream is now complete from creation.
 ///
-/// `public(package)`, and this visibility is a security boundary (tightened
-/// 2026-08-31). While it was `public`, one PTB could call `new(<any agent_id>)`
-/// then the public `share` and mint a DECOY Reputation claiming any victim's
-/// agent — reconstructing exactly the `entry create_and_share` that was deleted
-/// for the same reason. That decoy defeated the `agent_id()` bindings in
-/// `deal`: an attacker passed a decoy for their own side of a dispute and the
-/// victim's real object for the other, taking zero blowback while driving a
-/// rival's score down for the cost of gas.
+/// `public(package)`, and this visibility is a security boundary: a `public`
+/// version would let one PTB call `new(<any agent_id>)` then the public
+/// `share` and mint a DECOY Reputation claiming any victim's agent. That
+/// decoy would defeat the `agent_id()` bindings in `deal`: an attacker could
+/// pass a decoy for their own side of a dispute and the victim's real object
+/// for the other, taking zero blowback while driving a rival's score down
+/// for the cost of gas.
 ///
 /// Package-only minting is what makes "exactly one Reputation per agent"
 /// true, which is in turn what makes `reputation.agent_id() == deal.x_agent`

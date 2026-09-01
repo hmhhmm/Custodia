@@ -1,27 +1,13 @@
-// Owner: Person 4 (frontend + orchestration).
-// STATUS: real implementation, reading the live AgentRegistry on Sui
-// testnet.
-//
-// Verified this session against the actual GraphQL schema (introspected
-// live at https://graphql.testnet.sui.io/graphql, not assumed) and a
-// live test query — `multiGetObjects(keys: [{address}])` is real and
-// confirmed working. Also independently confirmed via a direct query
-// that the deployed AgentRegistry at VITE_AGENT_REGISTRY_ID currently
-// has ZERO registered agents (`"agents": []`) — this is not a bug in
-// this file, it is the genuine on-chain state. discoverAgents() returning
-// an empty array against the real registry today is the correct,
-// truthful result, not a broken query. Someone must call
-// `agent_identity::register_and_keep` to register a demo agent before
-// this can return real candidates.
+// Reads the live on-chain AgentRegistry via Sui GraphQL. discoverAgents()
+// returns an empty array when the registry has no matching agents — that
+// is a genuine result, not a broken query; call
+// `agent_identity::register_and_keep` (see Onboarding.tsx) to register one.
 
 import { SuiGraphQLClient } from "@mysten/sui/graphql";
 import { graphql } from "@mysten/sui/graphql/schema";
+import { AGENT_REGISTRY_ID } from "../sui/config";
 
 const GRAPHQL_URL = "https://graphql.testnet.sui.io/graphql";
-
-const AGENT_REGISTRY_ID: string =
-  import.meta.env.VITE_AGENT_REGISTRY_ID ??
-  "0xf42821c47c23e96967bdc04b4265f38f7c92697bb966204205aff3a7d8e214e4";
 
 const client = new SuiGraphQLClient({ url: GRAPHQL_URL, network: "testnet" });
 

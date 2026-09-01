@@ -1,16 +1,12 @@
-// Owner: Person 4 (frontend + orchestration).
-//
-// Persistent app shell: present on every screen. This is the structural
-// answer to "must read as real software" — a wordmark, real nav, and an
-// always-visible identity indicator, so nothing ever renders as an
-// isolated screen floating in empty space. `activeNav` and `identity`
-// are placeholder-driven until Person 2's real zkLogin session and a
-// real "Active Deals" vs "History" split exist — see App.tsx.
+// Persistent app shell: present on every screen — a wordmark, real nav,
+// and an always-visible identity indicator, so nothing ever renders as an
+// isolated screen floating in empty space. `identityLabel` is a
+// hardcoded placeholder until real zkLogin session data exists — see
+// App.tsx.
 //
 // Content width: max-w-6xl (not max-w-3xl) so a multi-column dashboard
 // grid actually uses the viewport instead of squeezing into a narrow
-// centered column — a real layout bug from the earlier pass, per direct
-// feedback.
+// centered column.
 
 import type { ReactNode } from "react";
 

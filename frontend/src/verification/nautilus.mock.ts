@@ -2,8 +2,6 @@
 // SIMULATED / MOCKED — this file does NOT talk to real Nautilus infrastructure.
 // =============================================================================
 //
-// Owner: Person 3 (verification/storage).
-//
 // This is the primary deliverable for Nautilus in this hackathon, not a
 // last-resort fallback. Real Nautilus requires standing up an actual AWS
 // Nitro Enclave (or Marlin Oyster for Dockerized deployment), registering
@@ -22,7 +20,8 @@
 // This module's return shape is designed as a drop-in replacement for what
 // a real Nautilus attestation reference would look like structurally, so
 // swapping in a real implementation later should not require changing
-// Deal.proof_ref's format — see attachProofToDeal in proof.ts.
+// Deal.proof_ref's format — see sui/ptb-deliver.ts, which writes this
+// attestation's id into the on-chain DealProof.
 
 export interface MockAttestation {
   attestationId: string;
@@ -31,8 +30,8 @@ export interface MockAttestation {
   timestamp: string;
   verified: true;
   /** Always true. Never omit or rename this field — every consumer of a
-   * MockAttestation (UI, logs, proof.ts) must check it and render/label
-   * the result as simulated. */
+   * MockAttestation (UI, logs) must check it and render/label the result
+   * as simulated. */
   mocked: true;
 }
 

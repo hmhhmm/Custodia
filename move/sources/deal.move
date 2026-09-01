@@ -255,7 +255,7 @@ public struct DealSettled has copy, drop {
 // Creation
 // ---------------------------------------------------------------------------
 
-/// PTB #1 entry point — lock-escrow-and-create-deal (Person 2).
+/// PTB #1 entry point — lock-escrow-and-create-deal.
 ///
 /// Draws `amount` from the client's Mandate (which now custodies the funds)
 /// and returns the Deal. The mandate assertions run BEFORE any funds move, so
@@ -465,7 +465,7 @@ public fun mark_delivered(
 // Settlement — release
 // ---------------------------------------------------------------------------
 
-/// PTB #2 entry point — verify-and-release-and-update-reputation (Person 2).
+/// PTB #2 entry point — verify-and-release-and-update-reputation.
 ///
 /// CLIENT-ONLY, and that is the security boundary. Reaching `Delivered`
 /// requires only the specialist's own signature, so if the specialist could
@@ -928,9 +928,6 @@ public fun status(deal: &Deal): DealStatus {
 /// Numeric status for clients that cannot pattern-match a Move enum.
 /// 0 Negotiating · 1 Escrowed · 2 Accepted · 3 Delivered · 4 Verified
 /// 5 Released · 6 Disputed · 7 Refunded · 8 Settled
-///
-/// NOTE for Person 4: these numbers CHANGED when `Accepted` was inserted.
-/// Released was 4 and is now 5; Disputed was 5 and is now 6.
 public fun status_rank(deal: &Deal): u8 {
     rank(deal.status)
 }
@@ -956,11 +953,9 @@ public fun stage_deadline_ms(deal: &Deal): u64 {
 }
 
 /// The two owner addresses currently party to this deal, resolved through the
-/// registry so ownership transfers are reflected.
-///
-/// Offered to Person 3: an access-control policy can DERIVE its allowlist from
-/// this rather than storing a second copy that drifts out of sync after a
-/// `transfer_ownership`.
+/// registry so ownership transfers are reflected. Used by
+/// `deal_access::new_for_deal` to DERIVE its allowlist from this rather than
+/// storing a second copy that drifts out of sync after a `transfer_ownership`.
 public fun party_owners(deal: &Deal, registry: &AgentRegistry): (address, address) {
     (
         specialist_owner(registry, deal.client_agent),
@@ -974,10 +969,10 @@ public fun party_owners(deal: &Deal, registry: &AgentRegistry): (address, addres
 //
 // Event struct fields are private to their defining module, so a test module
 // can retrieve a `DealReleased` via `sui::event::events_by_type` but cannot
-// read it. These accessors exist so the event stream — which is Person 2's
-// only source for a new Deal's ID and Person 4's only source for receipt
-// amount and category — can actually be asserted. `#[test_only]` code is
-// stripped from published bytecode, so they cost nothing on-chain.
+// read it. These accessors exist so the event stream — the frontend's only
+// source for a new Deal's ID and for receipt amount/category — can actually
+// be asserted. `#[test_only]` code is stripped from published bytecode, so
+// they cost nothing on-chain.
 
 #[test_only]
 public fun released_paid_to(e: &DealReleased): address { e.paid_to }

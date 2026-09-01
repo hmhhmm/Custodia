@@ -11,24 +11,14 @@
 // This component is a pure renderer — it takes `steps` as a prop and
 // animates state transitions, but does NOT itself decide when a step
 // completes. See orchestrator.ts for the real driver (discovery, Gemini,
-// the on-chain PTBs, Walrus/Seal, Nautilus-mock) — demoStatusSequence.ts
-// is the superseded fully-scripted version, kept only for reference.
+// the on-chain PTBs, Walrus/Seal, Nautilus-mock).
 
 import { AnimatePresence, motion } from "motion/react";
 import { Seal } from "./components/Seal";
-import type {
-  CandidateInfo,
-  MandateSnapshot,
-  StatusStep,
-  VerificationInfo,
-} from "./types";
+import type { CandidateInfo, StatusStep, VerificationInfo } from "./types";
 
 function isCandidateInfo(detail: StatusStep["detail"]): detail is CandidateInfo {
   return typeof detail === "object" && detail !== null && "suinsName" in detail;
-}
-
-function isMandateSnapshot(detail: StatusStep["detail"]): detail is MandateSnapshot {
-  return typeof detail === "object" && detail !== null && "maxSpend" in detail;
 }
 
 function isVerificationInfo(detail: StatusStep["detail"]): detail is VerificationInfo {
@@ -51,15 +41,6 @@ function CandidateLine({ detail }: { detail: CandidateInfo }) {
   return (
     <p className="mt-1 pl-6 font-data text-sm text-manifest">
       {detail.suinsName} · Reputation {detail.reputationScore}
-    </p>
-  );
-}
-
-function MandateLine({ detail }: { detail: MandateSnapshot }) {
-  return (
-    <p className="mt-1 pl-6 font-data text-sm text-manifest">
-      {detail.spentSoFar} / {detail.maxSpend} SUI · {detail.allowedCategories.join(", ")} · expires{" "}
-      {detail.expiresAt}
     </p>
   );
 }
@@ -116,7 +97,6 @@ export function StatusFeed({ steps, counterpartyName }: { steps: StatusStep[]; c
                       </span>
                     </div>
                     {isCandidateInfo(step.detail) && <CandidateLine detail={step.detail} />}
-                    {isMandateSnapshot(step.detail) && <MandateLine detail={step.detail} />}
                     <DetailLine detail={step.detail} />
                   </div>
                 )}

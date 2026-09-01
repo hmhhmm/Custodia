@@ -1,18 +1,8 @@
-// Owner: Person 3 (verification/storage).
-// STATUS: real implementation via the Walrus HTTP API (publisher/aggregator).
-//
-// Verified against the installed `accessing-data` Sui skill
-// (.claude/skills/accessing-data/walrus.md, sourced from docs.wal.app),
-// since docs.wal.app itself returned 403 to direct fetches this session.
-// These are the current PUBLIC TESTNET endpoints — community-run, subject
-// to change and to a ~10 MiB per-request rate limit. Re-verify against
-// https://docs.wal.app/docs/network-reference before switching to mainnet
-// or before relying on this for anything beyond a hackathon demo.
+// Walrus HTTP API (publisher/aggregator). These are the current PUBLIC
+// TESTNET endpoints — community-run, subject to change and to a ~10 MiB
+// per-request rate limit. Re-verify against
+// https://docs.wal.app/docs/network-reference before switching to mainnet.
 
-// This runs in the Vite-built frontend, not Node — env vars must go
-// through import.meta.env and be prefixed VITE_ to be exposed to client
-// code (see vite.config.ts / README's env var section). `process.env`
-// does not exist in the browser and would throw at runtime.
 const WALRUS_PUBLISHER_URL: string =
   import.meta.env.VITE_WALRUS_PUBLISHER_URL ?? "https://publisher.walrus-testnet.walrus.space";
 const WALRUS_AGGREGATOR_URL: string =
@@ -89,11 +79,6 @@ export async function readBlob(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-// NOTE: if a standalone Node service turns out cleaner for these calls
-// than running them in the browser (e.g. to keep publisher credentials
-// server-side — not currently needed since testnet publishers are
-// unauthenticated), propose moving this to a new /services/verification
-// package and update the root package.json workspaces field +
-// /docs/ARCHITECTURE.md
-// accordingly — flag this decision to the team rather than doing it
-// silently.
+// NOTE: testnet publishers are unauthenticated, so these calls run
+// directly from the browser. A publisher requiring credentials would need
+// a server-side proxy instead.

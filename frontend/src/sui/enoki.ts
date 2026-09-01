@@ -10,5 +10,3 @@
 
 // TODO: export async function sponsorAndExecute(txb: ..., ...): Promise<...>
 //   Wraps a Programmable Transaction Block for sponsorship + execution.
-//   Confirm with Person 4 what shape the txb arrives in from
-//   src/agent before finalizing this signature.

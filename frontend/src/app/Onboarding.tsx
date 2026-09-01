@@ -1,33 +1,14 @@
-// Owner: Person 4 (frontend + orchestration).
-//
-// Real one-time onboarding flow, genuinely required before a deal can be
-// created: the connected wallet needs its own on-chain AgentIdentity
-// (client_agent argument to PTB #1) and a funded Mandate delegating to a
-// specialist address. Neither existed anywhere in the codebase before
-// this file — flagged and built here rather than left as a silent gap,
-// since "wire everything together" cannot be true while these are
-// missing.
-//
-// This screen also offers registering a DEMO SPECIALIST agent, because
-// the live AgentRegistry has zero registered agents today (verified via
-// GraphQL) — without at least one, discoverAgents() has nothing to find,
-// full stop, regardless of how correct the rest of the wiring is.
-//
-// FIXED (confirmed live bug via a fresh audit this session): an earlier
-// version of this file registered the client's AgentIdentity but then
-// discarded the resulting object ID — nothing captured it, so
-// orchestrator.ts had no real ID to use and substituted the wallet
-// address instead, which fails object resolution on-chain. This version
-// captures agentId + reputationId for BOTH the client and the demo
-// specialist and hands them to the parent via onComplete, so
-// orchestrator.ts can be given real object IDs instead of guessing.
+// One-time onboarding flow, required before a deal can be created: the
+// connected wallet needs its own on-chain AgentIdentity (client_agent
+// argument to PTB #1) and a funded Mandate delegating to a specialist
+// address. Also offers registering a demo specialist agent, since
+// discoverAgents() needs at least one registered agent to find.
 
 import { useState } from "react";
 import { dAppKit } from "../sui/dapp-kit";
-import { buildRegisterAgentTx, extractRegisteredAgent, type RegisteredAgent } from "../sui/ptb-register-agent";
+import { buildRegisterAgentTx, extractRegisteredAgentFromResult, type RegisteredAgent } from "../sui/ptb-register-agent";
 import { buildCreateFundedMandateTx } from "../sui/ptb-mandate";
-
-type StepState = "pending" | "active" | "done" | "failed";
+import type { StatusStepState } from "./types";
 
 export interface OnboardingResult {
   clientAgent: RegisteredAgent;
@@ -36,9 +17,9 @@ export interface OnboardingResult {
 }
 
 export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResult) => void }) {
-  const [clientAgentStatus, setClientAgentStatus] = useState<StepState>("pending");
-  const [specialistAgentStatus, setSpecialistAgentStatus] = useState<StepState>("pending");
-  const [mandateStatus, setMandateStatus] = useState<StepState>("pending");
+  const [clientAgentStatus, setClientAgentStatus] = useState<StatusStepState>("pending");
+  const [specialistAgentStatus, setSpecialistAgentStatus] = useState<StatusStepState>("pending");
+  const [mandateStatus, setMandateStatus] = useState<StatusStepState>("pending");
   const [error, setError] = useState<string | null>(null);
 
   const [clientAgent, setClientAgent] = useState<RegisteredAgent | null>(null);
@@ -57,7 +38,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
       if (result.FailedTransaction) {
         throw new Error(result.FailedTransaction.status.error?.message ?? "Registration failed");
       }
-      const registered = extractRegisteredAgent(result.Transaction ?? {});
+      const registered = extractRegisteredAgentFromResult(result.Transaction ?? {});
       if (!registered) throw new Error("Registered, but no AgentRegistered event was found to read IDs from.");
       setClientAgent(registered);
       setClientAgentStatus("done");
@@ -79,7 +60,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
       if (result.FailedTransaction) {
         throw new Error(result.FailedTransaction.status.error?.message ?? "Registration failed");
       }
-      const registered = extractRegisteredAgent(result.Transaction ?? {});
+      const registered = extractRegisteredAgentFromResult(result.Transaction ?? {});
       if (!registered) throw new Error("Registered, but no AgentRegistered event was found to read IDs from.");
       setSpecialistAgent(registered);
       setSpecialistAgentStatus("done");
@@ -193,7 +174,7 @@ function OnboardingStep({
   resultId,
 }: {
   title: string;
-  status: StepState;
+  status: StatusStepState;
   onAction: () => void;
   actionLabel: string;
   resultId?: string;

@@ -1,46 +1,31 @@
-// Owner: Person 4 (frontend + orchestration).
-//
-// Real orchestrator driving the live status feed. Replaces
-// demoStatusSequence.ts's fully-scripted version. Every step below is
-// documented as REAL or SCRIPTED, honestly — do not read "connected to
-// the frontend" as "produces a successful demo end-to-end without a
-// funded wallet," because it does not: PTB steps require the connected
-// wallet to actually hold SUI and a Mandate to draw from, which is
-// infrastructure outside what a frontend can fabricate.
+// Real orchestrator driving the live status feed — every step is either
+// REAL (an on-chain call or a live third-party API) or SCRIPTED (no real
+// counterparty exists yet), labeled inline below. PTB steps require the
+// connected wallet to actually hold SUI and a Mandate to draw from.
 //
 // Step-by-step reality:
-//   1. searching / candidate-found — REAL: calls discovery.ts's
-//      discoverAgents() against the live on-chain AgentRegistry. Today
-//      that registry has ZERO registered agents (verified live via
-//      GraphQL this session), so this will legitimately return nothing
-//      until an agent is registered — see the empty-registry handling
-//      below, which surfaces that honestly instead of faking a result.
+//   1. searching / candidate-found — REAL: discoverAgents() against the
+//      live on-chain AgentRegistry.
 //   2. negotiating — REAL Gemini call (llm.ts's interpretGoal) to turn
 //      the goal into a category the Mandate can check, plus a scripted
 //      specialist reply (specialist-stand-ins.ts) — there is no real
 //      autonomous counterparty agent to negotiate with.
-//   3. mandate-check / escrow-locked — REAL PTB: builds and submits
-//      custodia::deal::create_and_share via the connected wallet
-//      (ptb-escrow.ts). Requires: a real Mandate object owned by the
-//      connected account, with enough custodied `funds` and an
-//      `allowed_categories` entry matching step 2's category exactly
-//      (case-sensitive — see llm.ts's comment on why this matters). The
+//   3. mandate-check / escrow-locked — REAL PTB: custodia::deal::create_and_share
+//      (ptb-escrow.ts). Requires a real Mandate owned by the connected
+//      account, with enough custodied `funds` and an `allowed_categories`
+//      entry matching step 2's category exactly (case-sensitive). The
 //      client's AgentIdentity/Reputation IDs come from the `onboarding`
-//      param (Onboarding.tsx), not the connected address — an address is
-//      not an object ID, and an earlier version of this file conflated
-//      the two (confirmed live bug, fixed alongside Onboarding.tsx).
-//      There is currently no UI to create a Mandate other than the
-//      Onboarding screen, so this step will genuinely fail for any
-//      account that skipped it — surfaced as a real error, not swallowed.
-//   4. work-in-progress — REAL: Walrus storeBlob() (unchanged from
-//      demoStatusSequence.ts, already verified live).
-//   5. verification — REAL: Nautilus mockNautilusAttest() (unchanged,
-//      already verified live, honestly labeled mocked).
+//      param (Onboarding.tsx) — an address is not an object ID. There is
+//      no UI to create a Mandate other than the Onboarding screen, so
+//      this step fails for any account that skipped it.
+//   4. work-in-progress — REAL: Seal-encrypts the deliverable, then
+//      uploads the ciphertext via Walrus storeBlob().
+//   5. verification — REAL call to the honestly-labeled Nautilus mock
+//      (mockNautilusAttest()).
 //   6. payment-released / reputation-updated — REAL PTBs: accept
 //      (ptb-accept.ts), mark_delivered (ptb-deliver.ts), then
 //      verify_and_release (ptb-release.ts, using onboarding.clientAgent's
-//      IDs and the discovered candidate's real reputationId — see
-//      discovery.ts). Same funded-wallet requirement as step 3.
+//      IDs and the discovered candidate's reputationId).
 
 import { dAppKit } from "../sui/dapp-kit";
 import { discoverAgents } from "../agent/discovery";
@@ -138,10 +123,8 @@ export async function runOrchestratedDeal(
   await wait(STEP_DELAY_MS);
 
   // --- Steps 3-4: REAL PTB #1 -------------------------------------------
-  // Requires a real Mandate owned by connectedAddress. There is no UI
-  // yet to create one, so this will genuinely throw for any account
-  // without a pre-existing Mandate — that is correct behavior, not a bug
-  // to paper over.
+  // Requires a real Mandate owned by connectedAddress — throws for any
+  // account without one (created via the Onboarding screen).
   const mandateId = import.meta.env.VITE_DEMO_MANDATE_ID;
   if (!mandateId) {
     fail(
@@ -188,9 +171,7 @@ export async function runOrchestratedDeal(
   // --- REAL PTB: create the Seal DealAllowlist for this Deal -----------
   // Must happen after the Deal exists (deal_access::new_for_deal reads the
   // Deal's party owners) and before encrypting the deliverable (encryption
-  // needs the allowlist's object id as the Seal identity namespace) — see
-  // seal.ts's file header for the full design-gap note this resolves for
-  // the deliverable (step 8), as opposed to pre-Deal negotiation content.
+  // needs the allowlist's object id as the Seal identity namespace).
   let allowlistId: string;
   try {
     const allowlistTx = buildCreateDealAllowlistTx({ dealId });

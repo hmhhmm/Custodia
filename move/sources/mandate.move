@@ -11,24 +11,16 @@
 // used in a transaction by its owner, so an owned Mandate could never be spent
 // by the agent it delegates to.
 //
-// CUSTODY — this is what makes the cap real (changed 2026-08-31).
-//
-// The Mandate previously held no funds. It was a counter, and
-// `create_and_lock_escrow` spent a `Coin<SUI>` from the delegate's own wallet,
-// which meant the cap constrained a CHANNEL, not an AGENT: the delegate could
-// move its own SUI anywhere without touching this module, and a delegate that
-// hit its cap could self-issue a fresh uncapped Mandate and carry on. The
-// pitch line "this cap is enforced by code, not a promise" was false.
-//
-// Now the human owner DEPOSITS SUI into the Mandate and
-// `withdraw_for_escrow` is the only way out of it into a Deal. The delegate
-// key never holds the principal at all. Two consequences worth naming:
-//
-//   * The self-issuance bypass evaporates without any new access control — a
-//     self-issued Mandate has a zero balance and is worthless.
-//   * With Enoki sponsoring gas, the agent key holds NO SUI whatsoever,
-//     neither principal nor gas. That is a materially stronger claim than the
-//     one this file used to carry, and it is now true.
+// CUSTODY — this is what makes the cap real. The human owner DEPOSITS SUI
+// into the Mandate, and `withdraw_for_escrow` is the only way out of it into
+// a Deal — the delegate key never holds the principal at all. This is what
+// distinguishes a real cap from a mere counter: if the delegate instead spent
+// a `Coin<SUI>` from its own wallet, the cap would constrain a CHANNEL, not
+// an AGENT — the delegate could move its own SUI anywhere without touching
+// this module, and a delegate that hit its cap could self-issue a fresh
+// uncapped Mandate and carry on. With funds actually custodied here (and,
+// with Enoki sponsoring gas, the agent key holding no SUI at all — neither
+// principal nor gas), "this cap is enforced by code, not a promise" is true.
 //
 // `max_spend` and `funds` are deliberately independent: `max_spend` is
 // AUTHORISATION, `funds` is CUSTODY. The effective limit is
@@ -81,16 +73,13 @@ public struct Mandate has key {
     max_spend: u64,
     spent_so_far: u64,
     allowed_categories: vector<String>,
-    /// RESOLVED (was PROPOSED in /docs/ARCHITECTURE.md): epoch MILLISECONDS,
-    /// compared against `sui::clock::Clock.timestamp_ms()`. Chosen over an
-    /// epoch number because a mandate's time window ("within 2 hours") is
-    /// sub-epoch, and Clock is the precise source — `ctx.epoch_timestamp_ms()`
-    /// only returns the epoch start time.
+    /// Epoch MILLISECONDS, compared against `sui::clock::Clock.timestamp_ms()`.
+    /// Chosen over an epoch number because a mandate's time window ("within 2
+    /// hours") is sub-epoch, and Clock is the precise source —
+    /// `ctx.epoch_timestamp_ms()` only returns the epoch start time.
     expires_at: u64,
     revoked: bool,
-    /// NEW 2026-08-31 — the custodied principal. See the CUSTODY note above.
-    /// This is a change to a core object's fields per /CLAUDE.md rule 5 and
-    /// was flagged to the team before landing.
+    /// The custodied principal. See the CUSTODY note above.
     funds: Balance<SUI>,
 }
 
@@ -134,7 +123,7 @@ public struct MandateRefunded has copy, drop {
 /// `delegate != owner` is enforced. A mandate naming its own owner as delegate
 /// is not a delegation, it is a person capping themselves, and it was the
 /// shape the old self-issuance bypass relied on. Note this means the demo
-/// needs a SECOND address for the agent — flagged to Person 2 and Person 4.
+/// needs a SECOND address for the agent.
 public fun new(
     delegate: address,
     max_spend: u64,
@@ -180,7 +169,7 @@ entry fun create_and_share(
     share(new(delegate, max_spend, allowed_categories, expires_at, ctx));
 }
 
-/// Create, fund, and share in one call — the path Person 2's UI should use,
+/// Create, fund, and share in one call — the path the frontend should use,
 /// since an unfunded Mandate cannot authorise anything.
 entry fun create_funded_and_share(
     delegate: address,
@@ -228,7 +217,7 @@ public fun deposit(mandate: &mut Mandate, funding: Coin<SUI>, ctx: &TxContext) {
 /// cannot strand a live deal either — funds for a live Deal already moved into
 /// the Deal object at creation. It does mean an owner can empty a mandate
 /// under the delegate's feet, which is the human's prerogative over their own
-/// money and belongs in Person 4's UI as a warning, not in Move as a block.
+/// money and belongs in the frontend as a warning, not in Move as a block.
 public fun reclaim(mandate: &mut Mandate, ctx: &mut TxContext): Coin<SUI> {
     assert!(ctx.sender() == mandate.owner, ENotOwner);
 
@@ -242,8 +231,8 @@ public fun reclaim(mandate: &mut Mandate, ctx: &mut TxContext): Coin<SUI> {
 /// `custodia::deal::create_and_lock_escrow` before any funds move — if this
 /// aborts, the entire PTB reverts and no escrow is locked.
 ///
-/// Signature unchanged so Person 2's existing call site survives; the custody
-/// check was added to the body, which upgrade rules permit.
+/// Signature unchanged so existing call sites survive; the custody check
+/// was added to the body, which upgrade rules permit.
 public fun assert_within_mandate(
     mandate: &Mandate,
     amount: u64,
@@ -356,9 +345,10 @@ public fun remaining(mandate: &Mandate): u64 {
     else mandate.max_spend - mandate.spent_so_far
 }
 
-/// What can actually be spent right now — `min(authorised, custodied)`. This
-/// is the number Person 4's mandate snapshot should show, not `remaining()`,
-/// because a mandate authorising 10 while holding 2 can only spend 2.
+/// What can actually be spent right now — `min(authorised, custodied)`. Any
+/// UI showing a mandate's spendable budget should use this, not
+/// `remaining()`, because a mandate authorising 10 while holding 2 can only
+/// spend 2.
 public fun spendable(mandate: &Mandate): u64 {
     let r = mandate.remaining();
     let f = mandate.funds.value();

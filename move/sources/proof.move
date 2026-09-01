@@ -1,5 +1,4 @@
-// Owner: Person 1 (Move/contracts), designed against Person 3's proposed shape
-// in frontend/src/verification/proof.ts — needs their sign-off.
+// Owner: Person 1 (Move/contracts).
 //
 // DealProof is the on-chain object `Deal.proof_ref` points at. Before this
 // module existed, `mark_delivered` took a bare `ID` that nothing validated: a
@@ -29,14 +28,13 @@ const EEmptyStorageId: vector<u8> = b"Proof must reference a stored artifact";
 
 /// How the attestation over the referenced artifact was produced.
 ///
-/// This is an ENUM rather than an `attestation_mocked: bool`, and that choice
-/// is the whole point of /CLAUDE.md rule 6 ("say explicitly when something is
-/// simulated vs. real"). A bool defaults to `false` and every consumer can
-/// silently ignore it. A variant forces every `match` to name the simulated
-/// case — and, more importantly, there is NO CONSTRUCTOR for `Enclave`
-/// anywhere in this package, so an on-chain proof claiming a real enclave
-/// attestation is currently UNCONSTRUCTIBLE. That is a guarantee the chain
-/// enforces, not a promise to set a flag honestly.
+/// This is an ENUM rather than an `attestation_mocked: bool`, so that
+/// simulated vs. real is always explicit. A bool defaults to `false` and
+/// every consumer can silently ignore it. A variant forces every `match` to
+/// name the simulated case — and, more importantly, there is NO CONSTRUCTOR
+/// for `Enclave` anywhere in this package, so an on-chain proof claiming a
+/// real enclave attestation is currently UNCONSTRUCTIBLE. That is a
+/// guarantee the chain enforces, not a promise to set a flag honestly.
 public enum AttestationKind has copy, drop, store {
     /// No attestation. The artifact is stored; nothing vouches for it.
     None,
@@ -69,7 +67,7 @@ public struct DealProof has key, store {
     attestation_id: String,
     /// Versioned by `format_version`. Anything not yet designed goes HERE
     /// rather than forcing a new struct type after publish, because struct
-    /// fields freeze at publish and Person 3's format is not final.
+    /// fields freeze at publish.
     extra: vector<u8>,
     created_by: address,
     created_at_ms: u64,
@@ -198,7 +196,7 @@ public fun attestation(proof: &DealProof): AttestationKind {
     proof.attestation
 }
 
-/// Convenience for Person 4's "simulated" badge. Never let a simulated
+/// Convenience for a UI's "simulated" badge. Never let a simulated
 /// attestation render indistinguishably from a real one.
 public fun is_simulated(proof: &DealProof): bool {
     match (&proof.attestation) {

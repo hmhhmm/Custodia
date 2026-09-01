@@ -1,9 +1,6 @@
-// Owner: Person 4 (frontend + orchestration).
-//
-// Receipt screen: closes the loop back to the dashboard. Per the design
-// brief, "Back to your deals" must land on a dashboard that now includes
-// this deal — state visibly persists rather than the receipt being a
-// dead end. See App.tsx for how the new DealSummary gets appended.
+// Receipt screen: closes the loop back to the dashboard — "Back to your
+// deals" lands on a dashboard that now includes this deal. See App.tsx for
+// how the new DealSummary gets appended.
 
 import { useState } from "react";
 import { CurrentAccountSigner, type DAppKit } from "@mysten/dapp-kit-core";

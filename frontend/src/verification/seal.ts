@@ -1,49 +1,19 @@
-// Owner: Person 3 (verification/storage).
-// STATUS: real implementation, following the documented Seal flow.
-// ENCRYPT PATH VERIFIED LIVE this session: ran an actual
-// `client.encrypt()` call against the real testnet key server below from
-// a throwaway Node script (not just type-checked) — it returned a
-// genuine 304-byte encrypted object and 32-byte backup key. DECRYPT is
-// implemented to the same verified API shape but not exercised live in
-// this session, because doing so needs an already-created
-// `DealAllowlist` object on-chain (a PTB call outside this file's
-// ownership — see the design gap below) to build a real `seal_approve`
-// dry-run transaction against.
-//
-// Every piece verified this session, not guessed:
-//   - @mysten/seal@1.4.6 installed; SealClient/SessionKey/EncryptOptions/
-//     DecryptOptions confirmed by reading the installed package's own
-//     .d.mts files.
-//   - The testnet committee key server object ID below
-//     (0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98)
-//     was independently verified via a live GraphQL query against
-//     https://graphql.testnet.sui.io/graphql — confirmed to exist
-//     on-chain and typed `key_server::KeyServer`, and then actually used
-//     in a successful live encrypt() call. Not copied blind from docs.
-//   - custodia::deal_access::seal_approve is real and deployed (see
-//     move/sources/deal_access.move; live on testnet at
-//     0x881df0e7497084148538356c075a4d9e3640fac30afea1e2328aba28b33b8f71,
-//     confirmed via GraphQL this session) — its `id` key-prefix and
-//     abort-on-deny convention are what this file's decrypt path targets.
+// Seal encryption for Deal-scoped content, gated by an on-chain
+// `custodia::deal_access::DealAllowlist` — only the client and specialist
+// named on a Deal's allowlist can decrypt.
 //
 // DESIGN GAP (documented in /docs/ARCHITECTURE.md, not fixed here):
 // DealAllowlist is keyed on an existing Deal's ID, so this can only
 // encrypt content for a Deal that already exists (step 8, the
 // deliverable) — not step-4 negotiation terms, which happen before any
-// Deal object exists. Do not use this for pre-Deal negotiation content
-// without first building the NegotiationSession object the architecture
-// doc calls for.
+// Deal object exists.
 
 import { SealClient, SessionKey } from "@mysten/seal";
 import type { Signer } from "@mysten/sui/cryptography";
 import { Transaction } from "@mysten/sui/transactions";
 import type { ClientWithExtensions, CoreClient } from "@mysten/sui/client";
+import { PACKAGE_ID as CUSTODIA_PACKAGE_ID } from "../sui/config";
 
-const CUSTODIA_PACKAGE_ID: string =
-  import.meta.env.VITE_CUSTODIA_PACKAGE_ID ??
-  "0x881df0e7497084148538356c075a4d9e3640fac30afea1e2328aba28b33b8f71";
-
-// Verified live on Sui testnet via GraphQL this session — see file header.
 // Single-entry committee config, matching the official documented example
 // for testnet (docs.sui.io/sui-stack/seal/using-seal) rather than the
 // multi-server independent list, since a committee config only needs one
@@ -84,9 +54,8 @@ function createSealClient(suiClient: ClientWithExtensions<{ core: CoreClient }>)
  * on-chain `DealAllowlist` can decrypt it.
  *
  * `dealAllowlistObjectId` must be the object ID of an already-created
- * `custodia::deal_access::DealAllowlist` for this deal (built via
- * `deal_access::new_and_share` — a PTB call this file does not itself
- * make, per the ownership boundary in /docs/ARCHITECTURE.md). The Seal
+ * `custodia::deal_access::DealAllowlist` for this deal (see
+ * sui/ptb-deal-access.ts's `buildCreateDealAllowlistTx`). The Seal
  * identity `id` is namespaced under that allowlist's own object ID, per
  * `check_policy`'s prefix check in deal_access.move.
  */
@@ -155,8 +124,7 @@ export async function decryptDealContent(
   sessionKey.setPersonalMessageSignature(signature);
 
   // hexToBytes, not Buffer — this runs in the browser bundle, where
-  // Buffer does not exist (same class of bug as process.env in
-  // walrus.ts, fixed earlier: no Node globals in frontend/src/ code).
+  // Buffer does not exist.
   const idBytes = hexToBytes(seedId);
 
   const tx = new Transaction();
