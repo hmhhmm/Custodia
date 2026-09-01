@@ -2,8 +2,9 @@
 //
 // Goal input — reached via the dashboard's "+ New deal" action, not a
 // standalone screen. Stays deliberately minimal: one field, one action.
-// Feeds into src/agent's discovery/matching logic (still stubs — see
-// /frontend/src/agent/).
+// Feeds into src/agent's real discovery/matching logic (llm.ts's Gemini
+// call and discovery.ts's live on-chain AgentRegistry query — see
+// /frontend/src/agent/ and orchestrator.ts).
 
 import { useState } from "react";
 

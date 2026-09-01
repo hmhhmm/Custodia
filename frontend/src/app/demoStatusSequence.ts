@@ -151,5 +151,8 @@ export async function runDemoStatusSequence(
     amount: 12,
     counterpartyName: "legal-review.sui",
     verification: { mocked: attestation.mocked, attestationId: attestation.attestationId },
+    // Fully scripted, like the rest of this file — see orchestrator.ts
+    // for the real Seal-encrypted equivalent this sequencer never used.
+    deliverable: { blobId: "demo-blob-0001", allowlistId: "0x0", seedId: "00" },
   });
 }

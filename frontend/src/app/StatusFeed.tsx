@@ -10,9 +10,9 @@
 //
 // This component is a pure renderer — it takes `steps` as a prop and
 // animates state transitions, but does NOT itself decide when a step
-// completes. See demoStatusSequence.ts for the current placeholder
-// driver and what it must be replaced with once Person 1/2/3's real
-// integration points exist.
+// completes. See orchestrator.ts for the real driver (discovery, Gemini,
+// the on-chain PTBs, Walrus/Seal, Nautilus-mock) — demoStatusSequence.ts
+// is the superseded fully-scripted version, kept only for reference.
 
 import { AnimatePresence, motion } from "motion/react";
 import { Seal } from "./components/Seal";
