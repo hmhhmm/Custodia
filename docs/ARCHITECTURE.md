@@ -128,7 +128,7 @@ Person 1 before other people's code depends on it.
 | zkLogin | Step 1 — user auth, no seed phrase required |
 | Enoki (sponsored transactions) | Steps 6 & 9 — users transact without holding SUI for gas |
 | Programmable Transaction Blocks | Steps 6 & 9 — the two composite on-chain operations (escrow+deal creation; verify+release+reputation update) |
-| Seal | Step 4 — encrypting private negotiation/deliverable content. REAL, via `@mysten/seal` and an allowlist `seal_approve` policy (`move/sources/deal_access.move`, `frontend/src/verification/seal.ts`) — package name confirmed, encrypt/decrypt flow written but UNTESTED against a live key server |
+| Seal | Step 8 — encrypting the deliverable content. REAL and wired into the live orchestrator, via `@mysten/seal` and an allowlist `seal_approve` policy (`move/sources/deal_access.move`, `frontend/src/verification/seal.ts`, `frontend/src/sui/ptb-deal-access.ts`) — encrypt path verified live against the real testnet key server this session; the full encrypt-before-Walrus / decrypt-on-receipt path type-checks and builds but has not completed a live confirmed run (blocked on the testnet faucet, not on missing code — see "Person 4 wiring status" below) |
 | Nautilus (TEE negotiation channel) | Step 4 — neutral execution of the agent-to-agent negotiation itself, so neither counterparty has to trust the other's software to run the matching honestly. Complements Seal (which gives confidentiality but not neutral execution). SIMULATED and NOT YET BUILT — added at the team's explicit request 2026-08-29, expanding the original feature table per /CLAUDE.md rule 3; see "TEE-mediated agent-to-agent negotiation (Step 4)" below |
 | Nautilus (work attestation) | Step 8 — attesting that delivered work matches what was promised. HIGHEST RISK; per /CLAUDE.md rule 6 the demo uses a clearly-labeled MOCKED attestation (`frontend/src/verification/nautilus.mock.ts`) as the primary deliverable, not a last-resort fallback — see "Verification Layer Implementation Notes" below |
 | Walrus | Step 8 — storing deliverable artifacts / proof material off-chain. REAL, via the public testnet HTTP API (`frontend/src/verification/walrus.ts`) |
@@ -241,11 +241,11 @@ Status of Person 3's scope as of this writing:
 
 | Piece | Status | Notes |
 |---|---|---|
-| Walrus | **Real, wired into the demo flow** | HTTP API via public testnet publisher/aggregator, confirmed against the installed `accessing-data` Sui skill (docs.wal.app returned 403 to direct fetches this session — the skill's `walrus.md` was the working verification source). `frontend/src/app/demoStatusSequence.ts` now actually calls `storeBlob()` for the "work-in-progress" step — verified live: a real `PUT` to `publisher.walrus-testnet.walrus.space` returns `200` with a genuine blob ID, though the public testnet publisher took ~11.7s to respond in testing, hence the "this can take several seconds" status message. Endpoints are community-run and may change; re-verify against docs.wal.app before mainnet. |
-| Seal | **Real on both sides; encrypt path verified live; not wired into the demo** | `custodia::deal_access` is real and deployed (`DealAllowlist`, `new_for_deal`, `check_policy`, `entry fun seal_approve` — verified live against testnet GraphQL as one of the 6 modules at `0x881df0e7...b8f71`). `@mysten/seal@1.4.6` is installed, and `frontend/src/verification/seal.ts` now implements `encryptDealContent`/`decryptDealContent` (renamed from `encryptNegotiationTerms`/`decryptNegotiationTerms` — see the design-gap note below on why "negotiation terms" was the wrong name) against the real API. `encryptDealContent` was run live from a throwaway script this session against the real testnet key server `0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98` (verified to exist on-chain first) and returned a genuine encrypted object. `decryptDealContent` is implemented to the same verified shape but not exercised live — it needs an on-chain `DealAllowlist` object to build a real `seal_approve` dry-run against, which requires the PTB call `deal_access::new_and_share` (Person 2's territory) that does not exist yet. **Design gap, unresolved:** `DealAllowlist` is keyed to an existing Deal, so this can only encrypt step-8 deliverable content, not step-4 pre-Deal negotiation terms — hence the rename away from "negotiation." Not wired into `demoStatusSequence.ts`. |
-| Nautilus | **Mocked by design, wired into the demo flow** | Real Nautilus requires deploying an actual AWS Nitro Enclave (or Marlin Oyster), registering PCR measurements on-chain, and verifying AWS certificate chains in Move — genuine infrastructure work, not an SDK call, and Mysten's own template is explicitly unaudited/incomplete. `demoStatusSequence.ts` now actually calls `mockNautilusAttest()` on the real bytes stored via Walrus above, rather than hardcoding a `{ mocked: true }` literal in the UI layer — the `attestationId` and `resultHash` shown to the user are genuinely computed, not fake strings. Every consumer (UI, logs) must surface the `mocked` flag — never let a simulated attestation appear indistinguishable from a real one in the demo. |
+| Walrus | **Real, wired into the demo flow** | HTTP API via public testnet publisher/aggregator, confirmed against the installed `accessing-data` Sui skill (docs.wal.app returned 403 to direct fetches this session — the skill's `walrus.md` was the working verification source). `frontend/src/app/orchestrator.ts` (not `demoStatusSequence.ts`, which is superseded/dead code) calls `storeBlob()` for the "work-in-progress" step, now on the Seal-encrypted deliverable bytes rather than plaintext — verified live: a real `PUT` to `publisher.walrus-testnet.walrus.space` returns `200` with a genuine blob ID, though the public testnet publisher took ~11.7s to respond in testing, hence the "this can take several seconds" status message. `readBlob()` is now also called for real, from `Receipt.tsx`'s decrypt-and-view action. Endpoints are community-run and may change; re-verify against docs.wal.app before mainnet. |
+| Seal | **Real on both sides, and now wired into the live orchestrator** | `custodia::deal_access` is real and deployed (`DealAllowlist`, `new_for_deal`, `check_policy`, `entry fun seal_approve` — verified live against testnet GraphQL as one of the 6 modules at `0x881df0e7...b8f71`). `@mysten/seal@1.4.6` is installed, and `frontend/src/verification/seal.ts` implements `encryptDealContent`/`decryptDealContent` against the real API. `encryptDealContent` was run live from a throwaway script against the real testnet key server `0xb012378c9f3799fb5b1a7083da74a4069e3c3f1c93de0b27212a5799ce1e1e98` (verified to exist on-chain first) and returned a genuine encrypted object. As of 2026-09-01, `orchestrator.ts` calls `deal_access::new_and_share` via a new `ptb-deal-access.ts` right after the Deal is created, reads the new `DealAllowlist`'s object id off the transaction's effects (no event exists for this — see "Person 4 wiring status" below for why and the workaround), then calls `encryptDealContent()` before `storeBlob()`. `Receipt.tsx` calls `decryptDealContent()` for real via a "Decrypt and view" action. Type-checks and builds clean; not yet exercised in a live confirmed transaction (faucet-blocked, not a code gap). **Design gap, still accurate:** `DealAllowlist` is keyed to an existing Deal, so this only covers step-8 deliverable content, not step-4 pre-Deal negotiation terms. |
+| Nautilus | **Mocked by design, wired into the demo flow** | Real Nautilus requires deploying an actual AWS Nitro Enclave (or Marlin Oyster), registering PCR measurements on-chain, and verifying AWS certificate chains in Move — genuine infrastructure work, not an SDK call, and Mysten's own template is explicitly unaudited/incomplete. `orchestrator.ts` calls `mockNautilusAttest()` on the real (pre-encryption) deliverable bytes, rather than hardcoding a `{ mocked: true }` literal in the UI layer — the `attestationId` and `resultHash` shown to the user are genuinely computed, not fake strings. Every consumer (UI, logs) must surface the `mocked` flag — never let a simulated attestation appear indistinguishable from a real one in the demo. |
 | TEE negotiation channel (Step 4) | **Design only — nothing built** | Added 2026-08-29 at the team's explicit request, expanding the original scope. Gives neutral execution of the negotiation, which Seal alone does not. Blocked on the pre-Deal `NegotiationSession` ID gap and on confirming Nautilus supports a multi-party session pattern. See "TEE-mediated agent-to-agent negotiation (Step 4)" above. |
-| `Deal.proof_ref` format | **RESOLVED — built and live, but not yet called from the frontend** | `move/sources/proof.move` defines a real `DealProof` object (`storage_id`, `attestation_id`, `attestation: AttestationKind`), and `deal::mark_delivered` (deal.move) validates and binds `deal.proof_ref = option::some(object::id(proof))`. This is a real object, not a bare `ID` — the format Person 3's `frontend/src/verification/proof.ts` proposed is superseded by Person 1's actual `DealProof` shape. Notably, `AttestationKind::Enclave` has no constructor anywhere in the module — a real-attestation claim is structurally unconstructible on-chain today, so `new_simulated`/`new_unattested` are the only ways to create one, which keeps the mocked-Nautilus honesty guarantee at the Move level, not just the UI level. What's still missing: nothing in the frontend actually calls `proof::new_simulated` / `proof::share_proof` / `deal::mark_delivered` — `demoStatusSequence.ts` shows a blob ID and attestation ID in the UI but never submits them on-chain, so no live `Deal` object has ever had its `proof_ref` set by this codebase yet. |
+| `Deal.proof_ref` format | **RESOLVED — built and wired into the real orchestrator** | `move/sources/proof.move` defines a real `DealProof` object (`storage_id`, `attestation_id`, `attestation: AttestationKind`), and `deal::mark_delivered` (deal.move) validates and binds `deal.proof_ref = option::some(object::id(proof))`. This is a real object, not a bare `ID` — Person 3's earlier `frontend/src/verification/proof.ts` proposal (now deleted, confirmed orphaned) is superseded by Person 1's actual `DealProof` shape and by `frontend/src/sui/ptb-deliver.ts`'s direct PTB wiring. Notably, `AttestationKind::Enclave` has no constructor anywhere in the module — a real-attestation claim is structurally unconstructible on-chain today, so `new_simulated`/`new_unattested` are the only ways to create one, which keeps the mocked-Nautilus honesty guarantee at the Move level, not just the UI level. `orchestrator.ts` (not `demoStatusSequence.ts`, which is dead code) now genuinely calls `proof::new_simulated` → `deal::mark_delivered` → `proof::share_proof` in one PTB — untested against a live confirmed transaction only because this session could not fund a testnet wallet (see "Person 4 wiring status" below), not because the call is missing. |
 
 What a real Nautilus integration would require post-hackathon: an AWS
 account with Nitro Enclave support (or a Marlin Oyster deployment), a
@@ -422,31 +422,85 @@ not the same as "runs end-to-end successfully today":
   authenticated user sees, for registering a client `AgentIdentity` and
   creating a funded `Mandate` — neither existed anywhere before.
 
-**Cannot be exercised end-to-end from this session, and why — not a
-code defect, a real external blocker:**
+**FIXED 2026-09-01 (follow-up audit, same day):** the ID-placeholder gaps
+described above are resolved, not just flagged:
+- `ptb-register-agent.ts`'s `extractRegisteredAgent` now reads both
+  `agent_id` and `reputation_id` off the real `AgentRegistered` event
+  (previously only `agent_id`, and the caller discarded even that).
+- `Onboarding.tsx` now captures the full `{agentId, reputationId}` for
+  both the client and the demo specialist and hands them to `App.tsx` via
+  a new `OnboardingResult`, instead of discarding the registration
+  result.
+- `orchestrator.ts` now takes `onboarding: OnboardingResult` as a real
+  parameter and uses `onboarding.clientAgent.agentId` /
+  `.reputationId` everywhere the client's `AgentIdentity`/`Reputation`
+  IDs are needed (PTB #1's `client_agent`, PTB #2's
+  `clientAgentIdentityId`/`clientReputationId`) — the wallet address is
+  no longer substituted for an object ID anywhere in this file.
+- `discovery.ts`'s `DiscoveredAgent` now also exposes `reputationId`
+  (read straight off the registry, same place `reputationScore` already
+  came from), so `orchestrator.ts` uses `candidate.reputationId` for the
+  specialist's `Reputation` object instead of the specialist's
+  `agentId` (a different object type — that was the fourth confirmed
+  bug).
+- Verified via `npx tsc --noEmit` and `npm run build` across `App.tsx` →
+  `Onboarding.tsx` → `orchestrator.ts` → `discovery.ts` together — clean.
+
+**Also wired this session: real Seal encryption for the deliverable.**
+`verification/seal.ts` was implemented and live-tested earlier but never
+called from anywhere (confirmed dead code by grep). Now:
+- A new `frontend/src/sui/ptb-deal-access.ts` builds a PTB calling
+  `deal_access::new_and_share` right after the Deal is created. That
+  entry function doesn't emit an event carrying the new
+  `DealAllowlist`'s object id (confirmed by reading `deal_access.move` —
+  no such event exists), and this session has no `sui` CLI to add one and
+  redeploy. Worked around by reading the id off the transaction's
+  `effects.changedObjects` instead — the single `Created` + `Shared`
+  entry in that PTB is unambiguously the new allowlist (verified against
+  the real `TransactionEffects`/`ChangedObject`/`SharedOwner` shapes in
+  the installed `@mysten/sui` package's own `.d.mts` files). If a `sui`
+  CLI becomes available, prefer adding a `DealAllowlistCreated` event and
+  simplifying this to a plain event read, matching every other
+  `extract*FromResult` helper in this codebase.
+- `orchestrator.ts` now encrypts the deliverable with
+  `encryptDealContent()` before `storeBlob()`, so the Walrus blob is
+  genuinely ciphertext, not plaintext.
+- `Receipt.tsx` now has a real "Decrypt and view" action calling
+  `decryptDealContent()` with a `CurrentAccountSigner` built from the
+  connected wallet — the deliverable is fetched from Walrus and decrypted
+  live in the browser, not simulated.
+- `encryptDealContent`'s return type gained a `seedId` field (the exact
+  Seal identity bytes used at encrypt time — allowlist id + random
+  nonce). This must round-trip through `DealReceipt.deliverable.seedId`
+  unchanged; it is not re-derivable from the allowlist id alone.
+
+**Cleanup done alongside the above:**
+- Deleted `frontend/src/verification/proof.ts` — confirmed orphaned (zero
+  imports anywhere), fully superseded by `proof.move`'s real `DealProof`
+  object and `ptb-deliver.ts`'s direct Move-call wiring.
+- Fixed stale comments in `GoalInput.tsx` (claimed discovery was "still
+  stubs" — it's real) and `StatusFeed.tsx` (pointed at
+  `demoStatusSequence.ts` as the current driver — `orchestrator.ts`
+  supersedes it; `demoStatusSequence.ts` itself is now confirmed dead
+  code, referenced only in comments, kept for reference).
+
+**Still cannot be exercised end-to-end from this session, and why — not
+a code defect, a real external blocker:**
 - The Sui testnet faucet rate-limited this environment's IP for the
   entire session (both the raw HTTP endpoint and the SDK's
   `requestSuiFromFaucetV2` — same block, confirming it is IP-based, not
-  a code issue). No demo wallet could be funded, so no PTB was ever
-  actually submitted and confirmed on-chain this session.
-- Even once funded, `orchestrator.ts`'s own inline comments flag two
-  real unresolved gaps: PTB #1's `client_agent` argument needs a real
-  `AgentIdentity` object ID (Onboarding.tsx registers one, but the
-  orchestrator was written before that flow existed and still passes the
-  raw wallet address as a placeholder — this needs reconciling), and PTB
-  #2's `clientReputationId` has no real source yet (the client's own
-  `Reputation` object ID isn't captured anywhere after registration).
+  a code issue). No demo wallet could be funded, so no PTB has ever
+  actually been submitted and confirmed on-chain from this session.
 - The `AgentRegistry` having zero agents means `Onboarding.tsx`'s
   "register a demo specialist" step must actually be run — by a real
   funded wallet — before discovery step 1 in `orchestrator.ts` can ever
   find a candidate.
 
-**Bottom line:** the wiring is real and each individual piece has been
-verified against live testnet state or a live successful call. The full
-chain has not completed a single live run this session, because doing so
-requires testnet SUI this session could not obtain. The next concrete
-step is: fund a real wallet (faucet, once its rate limit clears, or a
-manual transfer), walk through `Onboarding.tsx` with it, fix the
-`clientAgentIdentityId`/`clientReputationId` placeholders in
-`orchestrator.ts` to use the IDs `Onboarding.tsx` produces, then run a
-real deal through to completion and record the result here.
+**Bottom line:** the wiring is real, type-checked, and builds clean end
+to end, and each individual piece has been verified against live testnet
+state or a live successful call in isolation. The full chain has not
+completed a single live run this session, because doing so requires
+testnet SUI this session could not obtain. The next concrete step is:
+fund a real wallet (faucet, once its rate limit clears, or a manual
+transfer), walk through `Onboarding.tsx` with it, then run a real deal
+through to completion and record the result here.
