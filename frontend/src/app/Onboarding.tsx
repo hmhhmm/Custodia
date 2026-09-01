@@ -4,10 +4,12 @@
 // address. Also offers registering a demo specialist agent, since
 // discoverAgents() needs at least one registered agent to find.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { dAppKit } from "../sui/dapp-kit";
 import { buildRegisterAgentTx, extractRegisteredAgentFromResult, type RegisteredAgent } from "../sui/ptb-register-agent";
 import { buildCreateFundedMandateTx } from "../sui/ptb-mandate";
+import { findOwnedAgentIdentity } from "../sui/onboarding-status";
 import type { StatusStepState } from "./types";
 
 export interface OnboardingResult {
@@ -17,6 +19,7 @@ export interface OnboardingResult {
 }
 
 export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResult) => void }) {
+  const account = useCurrentAccount();
   const [clientAgentStatus, setClientAgentStatus] = useState<StatusStepState>("pending");
   const [specialistAgentStatus, setSpecialistAgentStatus] = useState<StatusStepState>("pending");
   const [mandateStatus, setMandateStatus] = useState<StatusStepState>("pending");
@@ -25,6 +28,41 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
   const [clientAgent, setClientAgent] = useState<RegisteredAgent | null>(null);
   const [specialistAgent, setSpecialistAgent] = useState<RegisteredAgent | null>(null);
   const [specialistOwnerAddress, setSpecialistOwnerAddress] = useState("");
+
+  // Reload wipes React state, but the AgentIdentity objects registered in a
+  // previous session still exist on-chain — re-check for them so the
+  // "Register" buttons don't ask you to redo work you've already done.
+  // The Mandate step is intentionally NOT auto-detected here: its delegate
+  // address is arbitrary and unknown ahead of time, so there's no reliable
+  // way to tell "already created" from "created for a different specialist"
+  // without you re-entering the delegate address anyway.
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+
+    findOwnedAgentIdentity(account.address, "client")
+      .then((found) => {
+        if (cancelled || !found) return;
+        setClientAgent(found);
+        setClientAgentStatus("done");
+      })
+      .catch(() => {
+        // Best-effort — leave the step in its normal "pending" state and
+        // let the Register button work as if this check never ran.
+      });
+
+    findOwnedAgentIdentity(account.address, "legal-review")
+      .then((found) => {
+        if (cancelled || !found) return;
+        setSpecialistAgent(found);
+        setSpecialistAgentStatus("done");
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
 
   async function handleRegisterClient() {
     setClientAgentStatus("active");
@@ -38,7 +76,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
       if (result.FailedTransaction) {
         throw new Error(result.FailedTransaction.status.error?.message ?? "Registration failed");
       }
-      const registered = extractRegisteredAgentFromResult(result.Transaction ?? {});
+      const registered = await extractRegisteredAgentFromResult(dAppKit.getClient(), result);
       if (!registered) throw new Error("Registered, but no AgentRegistered event was found to read IDs from.");
       setClientAgent(registered);
       setClientAgentStatus("done");
@@ -60,7 +98,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
       if (result.FailedTransaction) {
         throw new Error(result.FailedTransaction.status.error?.message ?? "Registration failed");
       }
-      const registered = extractRegisteredAgentFromResult(result.Transaction ?? {});
+      const registered = await extractRegisteredAgentFromResult(dAppKit.getClient(), result);
       if (!registered) throw new Error("Registered, but no AgentRegistered event was found to read IDs from.");
       setSpecialistAgent(registered);
       setSpecialistAgentStatus("done");
@@ -80,10 +118,10 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
     try {
       const tx = buildCreateFundedMandateTx({
         delegate: specialistOwnerAddress,
-        maxSpend: 50_000_000_000n, // 50 SUI
+        maxSpend: 200_000_000n, // 0.2 SUI — lowered from 50 for easier testnet-faucet testing
         allowedCategories: ["legal-review", "courier"],
         expiresAtMs: BigInt(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        fundingAmount: 20_000_000_000n, // 20 SUI
+        fundingAmount: 100_000_000n, // 0.1 SUI — lowered from 20 for easier testnet-faucet testing
       });
       const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
       if (result.FailedTransaction) {
