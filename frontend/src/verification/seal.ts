@@ -94,7 +94,7 @@ export async function encryptDealContent(
   data: Uint8Array,
   suiClient: ClientWithExtensions<{ core: CoreClient }>,
   dealAllowlistObjectId: string,
-): Promise<{ encryptedObject: Uint8Array; backupKey: Uint8Array }> {
+): Promise<{ encryptedObject: Uint8Array; backupKey: Uint8Array; seedId: string }> {
   const client = createSealClient(suiClient);
 
   // Seal identity = [allowlist object id bytes][nonce], matching
@@ -103,6 +103,12 @@ export async function encryptDealContent(
   // already-fetched key cannot be reused to decrypt future ciphertexts
   // encrypted under a new nonce, per deal_access.move's own revocation
   // note (ported from the Seal whitelist reference pattern).
+  //
+  // `id` (returned as `seedId`) MUST be kept by the caller and passed back
+  // into decryptDealContent unchanged — it is not derivable from the
+  // allowlist id alone since the nonce is random per encryption. Losing it
+  // makes the ciphertext permanently undecryptable (the whole point of the
+  // nonce is that it is not guessable/reused).
   const allowlistIdHex = dealAllowlistObjectId.startsWith("0x")
     ? dealAllowlistObjectId.slice(2)
     : dealAllowlistObjectId;
@@ -119,7 +125,7 @@ export async function encryptDealContent(
     data,
   });
 
-  return { encryptedObject, backupKey: key };
+  return { encryptedObject, backupKey: key, seedId: id };
 }
 
 /**

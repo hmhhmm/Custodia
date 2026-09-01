@@ -60,6 +60,13 @@ export interface DealReceipt {
   /** VERIFY: exact Sui testnet explorer URL pattern before wiring this up
    * for real — do not guess the path format. */
   explorerUrl?: string;
+  /** The deliverable, real and Seal-encrypted on Walrus — see
+   * verification/seal.ts and sui/ptb-deal-access.ts. `allowlistId` is the
+   * DealAllowlist object id needed to build the seal_approve dry-run tx;
+   * `seedId` is the exact Seal identity used at encrypt time ([allowlist
+   * id][random nonce], hex) and must be passed back unchanged to
+   * decryptDealContent() — it cannot be re-derived from allowlistId alone. */
+  deliverable: { blobId: string; allowlistId: string; seedId: string };
 }
 
 /** Row shown on the dashboard's deal history. A deliberately smaller
