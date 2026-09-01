@@ -9,23 +9,24 @@
     "preview": "vite preview",
     "lint": "eslint ."
   },
-  "_comment_deps": "VERIFY: add @mysten/enoki, @mysten/seal, @mysten/walrus — exact package names may differ, confirm each against the current Mysten SDK docs / npm registry before installing; do not guess version numbers.",
+  "_comment_deps": "VERIFY: add @mysten/enoki — exact package name confirmed matches Mysten's own docs, but not yet installed. @mysten/seal is installed and its encrypt path verified live against testnet this session (see frontend/src/verification/seal.ts). @mysten/walrus is not needed — Walrus is used via its public HTTP API directly, see frontend/src/verification/walrus.ts.",
   "dependencies": {
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "motion": "^13.1.1",
-    "@mysten/sui": "^2.27.1",
-    "@mysten/dapp-kit-react": "^2.1.22",
     "@mysten/dapp-kit-core": "^1.6.20",
-    "@tanstack/react-query": "^5.102.8"
+    "@mysten/dapp-kit-react": "^2.1.22",
+    "@mysten/seal": "^1.4.6",
+    "@mysten/sui": "^2.27.1",
+    "@tanstack/react-query": "^5.102.8",
+    "motion": "^13.1.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
-    "vite": "^8.2.2",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
     "tailwindcss": "^4.3.3",
-    "@tailwindcss/vite": "^4.3.3"
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2"
   }
 }
