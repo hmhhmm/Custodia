@@ -4,20 +4,22 @@
 // minimal gate before the shell renders (real zkLogin sign-in is not yet
 // wired; wallet connect via Landing's ConnectButton is the real path in).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCurrentAccount } from "@mysten/dapp-kit-react";
+import { useCurrentAccount, useWalletConnection } from "@mysten/dapp-kit-react";
 import { AppShell, type NavItem } from "./components/AppShell";
 import { Landing } from "./Landing";
 import { Onboarding, type OnboardingResult } from "./Onboarding";
 import { Dashboard } from "./Dashboard";
-import { GoalInput } from "./GoalInput";
-import { StatusFeed } from "./StatusFeed";
+import { MandateView } from "./MandateView";
+import { Settings } from "./Settings";
+import { ChatPanel } from "./ChatPanel";
 import { Receipt } from "./Receipt";
-import { runOrchestratedDeal } from "./orchestrator";
-import type { DealReceipt, DealSummary, StatusStep } from "./types";
+import { findOwnedMandate } from "../sui/onboarding-status";
+import { ENVOY_ADDRESS } from "../sui/envoy-signer";
+import type { DealReceipt, DealSummary } from "./types";
 
-type Screen = "onboarding" | "dashboard" | "goal" | "status" | "receipt";
+type Screen = "checking" | "onboarding" | "dashboard" | "chat" | "receipt";
 
 const SEED_DEALS: DealSummary[] = [
   {
@@ -61,46 +63,45 @@ function ScreenTransition({ children }: { children: React.ReactNode }) {
 
 export function App() {
   const account = useCurrentAccount();
+  const { status } = useWalletConnection();
   const authenticated = account !== null;
-  const [nav, setNav] = useState<NavItem>("active");
-  const [screen, setScreen] = useState<Screen>("onboarding");
+  const [nav, setNav] = useState<NavItem>("deals");
+  const [screen, setScreen] = useState<Screen>("checking");
   const [deals, setDeals] = useState<DealSummary[]>(SEED_DEALS);
-  const [steps, setSteps] = useState<StatusStep[]>([]);
-  const [currentGoal, setCurrentGoal] = useState<{ counterpartyName?: string; description?: string } | null>(
-    null,
-  );
   const [receipt, setReceipt] = useState<DealReceipt | null>(null);
+  const [lastTask, setLastTask] = useState("");
   const [onboarding, setOnboarding] = useState<OnboardingResult | null>(null);
 
+  // Re-derive whether onboarding was already completed from the chain —
+  // a Mandate is a permanent on-chain fact, so a page refresh shouldn't
+  // send someone who already set up Custodia back through setup again.
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+
+    findOwnedMandate(account.address, ENVOY_ADDRESS)
+      .then((mandateId) => {
+        if (cancelled) return;
+        setScreen(mandateId ? "dashboard" : "onboarding");
+        if (mandateId) setOnboarding({ mandateId });
+      })
+      .catch(() => {
+        if (!cancelled) setScreen("onboarding");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
   function handleNewDeal() {
-    setScreen("goal");
+    setScreen("chat");
   }
 
-  function handleGoalSubmit(goal: string) {
-    if (!onboarding) {
-      // Should be unreachable — GoalInput is only rendered after
-      // onboarding completes — but guard rather than pass undefined IDs
-      // into the orchestrator.
-      return;
-    }
-    setScreen("status");
-    setCurrentGoal({ description: goal });
-    // See orchestrator.ts for exactly which steps are on-chain vs. scripted.
-    runOrchestratedDeal(goal, account?.address, onboarding, {
-      onStepsChange: (nextSteps) => {
-        setSteps(nextSteps);
-        const found = nextSteps.find((s) => s.id === "candidate-found");
-        const candidateDetail = found?.detail;
-        if (candidateDetail && typeof candidateDetail === "object" && "suinsName" in candidateDetail) {
-          const suinsName = candidateDetail.suinsName;
-          setCurrentGoal((prev) => ({ ...prev, counterpartyName: suinsName }));
-        }
-      },
-      onComplete: (finalReceipt) => {
-        setReceipt(finalReceipt);
-        setScreen("receipt");
-      },
-    });
+  function handleDealComplete(finalReceipt: DealReceipt, task: string) {
+    setLastTask(task);
+    setReceipt(finalReceipt);
+    setScreen("receipt");
   }
 
   function handleBackToDeals() {
@@ -112,17 +113,24 @@ export function App() {
           amount: receipt.amount,
           status: "released",
           // The deal card's category doesn't yet have a real on-chain
-          // source; falling back to a generic label and the raw goal text.
+          // source; falling back to a generic label and the raw task text.
           category: "General",
-          description: currentGoal?.description ?? "",
+          description: lastTask,
         },
         ...prev,
       ]);
     }
-    setSteps([]);
     setReceipt(null);
-    setCurrentGoal(null);
+    setLastTask("");
     setScreen("dashboard");
+  }
+
+  if (status === "reconnecting") {
+    // autoConnect (dApp Kit's default) restores the last-used wallet on
+    // page load before the user presses anything — without this state,
+    // that restore looks identical to onboarding appearing out of nowhere,
+    // since `authenticated` flips true the instant it resolves.
+    return <ReconnectingScreen />;
   }
 
   if (!authenticated) {
@@ -133,8 +141,15 @@ export function App() {
     return <Landing onSignIn={() => {}} />;
   }
 
+  if (screen === "checking") {
+    // Brief window between "wallet connected" and "we know whether a
+    // Mandate already exists for it" — without this, Onboarding would
+    // flash before the on-chain check resolves.
+    return <ReconnectingScreen label="Checking your account…" />;
+  }
+
   return (
-    <AppShell activeNav={nav} onNavChange={setNav} identityLabel="you">
+    <AppShell activeNav={nav} onNavChange={setNav} address={account.address}>
       <AnimatePresence mode="wait">
         {screen === "onboarding" && (
           <ScreenTransition key="onboarding">
@@ -146,19 +161,29 @@ export function App() {
             />
           </ScreenTransition>
         )}
-        {screen === "dashboard" && (
+        {screen === "dashboard" && nav === "deals" && (
           <ScreenTransition key="dashboard">
             <Dashboard deals={deals} onNewDeal={handleNewDeal} />
           </ScreenTransition>
         )}
-        {screen === "goal" && (
-          <ScreenTransition key="goal">
-            <GoalInput onSubmit={handleGoalSubmit} onBack={() => setScreen("dashboard")} />
+        {screen === "dashboard" && nav === "mandate" && (
+          <ScreenTransition key="mandate">
+            <MandateView />
           </ScreenTransition>
         )}
-        {screen === "status" && (
-          <ScreenTransition key="status">
-            <StatusFeed steps={steps} counterpartyName={currentGoal?.counterpartyName} />
+        {screen === "dashboard" && nav === "settings" && (
+          <ScreenTransition key="settings">
+            <Settings address={account.address} />
+          </ScreenTransition>
+        )}
+        {screen === "chat" && onboarding && (
+          <ScreenTransition key="chat">
+            <ChatPanel
+              connectedAddress={account.address}
+              onboarding={onboarding}
+              onDealComplete={handleDealComplete}
+              onBack={() => setScreen("dashboard")}
+            />
           </ScreenTransition>
         )}
         {screen === "receipt" && receipt && (
@@ -168,5 +193,13 @@ export function App() {
         )}
       </AnimatePresence>
     </AppShell>
+  );
+}
+
+function ReconnectingScreen({ label = "Reconnecting wallet…" }: { label?: string }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-ink text-vellum">
+      <p className="text-sm text-manifest">{label}</p>
+    </div>
   );
 }

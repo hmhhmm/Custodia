@@ -54,10 +54,29 @@ function sealKindFor(stepId: string, detail: StatusStep["detail"]): "locked" | "
   return "verified";
 }
 
-export function StatusFeed({ steps, counterpartyName }: { steps: StatusStep[]; counterpartyName?: string }) {
+export function StatusFeed({
+  steps,
+  counterpartyName,
+  onBack,
+  embedded = false,
+}: {
+  steps: StatusStep[];
+  counterpartyName?: string;
+  onBack: () => void;
+  /** True when rendered inline inside a chat turn (ChatPanel.tsx) instead
+   * of as its own full screen — skips the page-level heading and the
+   * "Back to dashboard" action, since chat has no dead-end to escape. */
+  embedded?: boolean;
+}) {
+  const failedStep = steps.find((s) => s.state === "failed");
+
   return (
     <div>
-      <h1 className="mb-1 text-2xl font-semibold tracking-tight text-vellum">Working on it</h1>
+      {!embedded && (
+        <h1 className="mb-1 text-2xl font-semibold tracking-tight text-vellum">
+          {failedStep ? "Something went wrong" : "Working on it"}
+        </h1>
+      )}
       {counterpartyName && (
         <p className="mb-6 text-sm text-manifest">Deal with {counterpartyName}</p>
       )}
@@ -105,6 +124,16 @@ export function StatusFeed({ steps, counterpartyName }: { steps: StatusStep[]; c
           })}
         </div>
       </AnimatePresence>
+
+      {failedStep && !embedded && (
+        <button
+          type="button"
+          onClick={onBack}
+          className="mt-8 rounded-md border border-border px-4 py-2 text-sm font-medium text-vellum transition-colors hover:border-white/30"
+        >
+          Back to dashboard
+        </button>
+      )}
     </div>
   );
 }

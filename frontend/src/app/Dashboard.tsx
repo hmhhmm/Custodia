@@ -78,7 +78,7 @@ export function Dashboard({
           onClick={onNewDeal}
           className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
-          + New deal
+          Ask Envoy
         </button>
       </div>
 
