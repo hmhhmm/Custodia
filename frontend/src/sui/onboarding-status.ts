@@ -1,7 +1,7 @@
-// Re-derives onboarding status (client AgentIdentity, specialist AgentIdentity,
-// funded Mandate) from what's actually on-chain for the connected address —
-// App.tsx's screen state is otherwise lost on every reload, which makes a
-// wallet that has already completed onboarding look broken.
+// Re-derives onboarding status (client AgentIdentity, funded Mandate) from
+// what's actually on-chain for the connected address — App.tsx's screen
+// state is otherwise lost on every reload, which makes a wallet that has
+// already completed onboarding look broken.
 
 import { SuiGraphQLClient } from "@mysten/sui/graphql";
 import { graphql } from "@mysten/sui/graphql/schema";
@@ -37,12 +37,23 @@ const GetOwnedAgentIdentitiesQuery = graphql(`
   }
 `);
 
-const GetOwnedMandatesQuery = graphql(`
-  query GetOwnedMandates($owner: SuiAddress!, $type: String!) {
-    address(address: $owner) {
-      objects(filter: { type: $type }) {
-        nodes {
-          address
+// Mandate is a SHARED object (mandate.move's share() calls
+// transfer::share_object) — it has no AddressOwned owner at the Sui object
+// layer, so address(address:).objects(...) (used above for AgentIdentity)
+// can never find it, no matter how many Mandates exist for that owner.
+// Query all SHARED objects of this type globally instead, and filter
+// client-side by the Move struct's own `owner` field (mandate.owner, set
+// once at creation — a plain address value, unrelated to Sui-level object
+// ownership).
+// Note: the top-level Query.objects yields plain Object nodes (needs
+// asMoveObject), unlike Address.objects above which yields MoveObject
+// directly — same distinction discovery.ts already deals with.
+const GetSharedMandatesQuery = graphql(`
+  query GetSharedMandates($type: String!) {
+    objects(filter: { type: $type, ownerKind: SHARED }) {
+      nodes {
+        address
+        asMoveObject {
           contents {
             json
           }
@@ -62,10 +73,45 @@ interface AgentIdentityJson {
 }
 
 /** Mirrors custodia::mandate::Mandate's field names verbatim (excluding
- * `id`, not needed here). */
+ * `id`, not needed here).
+ * VERIFY: `Balance<SUI>` and `vector<String>`'s exact JSON shape aren't
+ * confirmed against official GraphQL RPC docs this session — `funds` is
+ * read defensively (see readMistValue below) and `allowed_categories` is
+ * assumed to serialize as a plain string array, matching how
+ * `capabilities: vector<String>` already reads elsewhere in this file. */
 interface MandateJson {
+  owner: string;
   delegate: string;
+  max_spend: string | number;
+  spent_so_far: string | number;
+  allowed_categories: string[];
+  expires_at: string | number;
   revoked: boolean;
+  funds: unknown;
+}
+
+export interface MandateDetails {
+  mandateId: string;
+  delegate: string;
+  maxSpendMist: bigint;
+  spentSoFarMist: bigint;
+  fundsMist: bigint;
+  allowedCategories: string[];
+  expiresAtMs: number;
+  revoked: boolean;
+}
+
+/** `Balance<SUI>` reads as either a bare numeric string/number, or as
+ * `{ value: ... }` depending on GraphQL RPC's exact serialization (not
+ * confirmed against official docs this session — see the VERIFY note on
+ * MandateJson). Handles both shapes rather than guessing one. */
+function readMistValue(raw: unknown): bigint {
+  if (typeof raw === "string" || typeof raw === "number") return BigInt(raw);
+  if (raw && typeof raw === "object" && "value" in raw) {
+    const value = (raw as { value: unknown }).value;
+    if (typeof value === "string" || typeof value === "number") return BigInt(value);
+  }
+  return 0n;
 }
 
 /** Finds an AgentIdentity owned by `owner` with the given capability tag
@@ -93,18 +139,45 @@ export async function findOwnedAgentIdentity(
   return null;
 }
 
-/** True if `owner` already has a non-revoked Mandate delegating to `delegate`. */
-export async function hasFundedMandate(owner: string, delegate: string): Promise<boolean> {
+/** Finds the full on-chain state of a non-revoked Mandate whose Move-level
+ * `owner` field is `owner` and whose `delegate` is `delegate` (Envoy's
+ * fixed demo address). Returns null if none exists yet.
+ *
+ * Scans every shared Mandate on the package, not just this owner's — there
+ * is no owner-indexed query for shared objects (see GetSharedMandatesQuery
+ * above). Fine at hackathon scale; would need a real indexer (see the
+ * accessing-data skill) if the Mandate count ever grows large. */
+export async function findMandateDetails(owner: string, delegate: string): Promise<MandateDetails | null> {
   const result = await client.query({
-    query: GetOwnedMandatesQuery,
-    variables: { owner, type: `${PACKAGE_ID}::mandate::Mandate` },
+    query: GetSharedMandatesQuery,
+    variables: { type: `${PACKAGE_ID}::mandate::Mandate` },
   });
   if (result.errors?.length) {
-    throw new Error(`Owned Mandate query failed: ${JSON.stringify(result.errors)}`);
+    throw new Error(`Shared Mandate query failed: ${JSON.stringify(result.errors)}`);
   }
-  const nodes = result.data?.address?.objects?.nodes ?? [];
-  return nodes.some((node) => {
-    const json = node?.contents?.json as MandateJson | undefined;
-    return json && !json.revoked && json.delegate === delegate;
-  });
+  const nodes = result.data?.objects?.nodes ?? [];
+  for (const node of nodes) {
+    const json = node?.asMoveObject?.contents?.json as MandateJson | undefined;
+    if (node?.address && json && !json.revoked && json.owner === owner && json.delegate === delegate) {
+      return {
+        mandateId: node.address,
+        delegate: json.delegate,
+        maxSpendMist: BigInt(json.max_spend),
+        spentSoFarMist: BigInt(json.spent_so_far),
+        fundsMist: readMistValue(json.funds),
+        allowedCategories: json.allowed_categories,
+        expiresAtMs: Number(json.expires_at),
+        revoked: json.revoked,
+      };
+    }
+  }
+  return null;
+}
+
+/** Finds a non-revoked Mandate owned by `owner` delegating to `delegate`
+ * (Envoy's fixed demo address). Returns its object ID, or null if none
+ * exists yet. */
+export async function findOwnedMandate(owner: string, delegate: string): Promise<string | null> {
+  const details = await findMandateDetails(owner, delegate);
+  return details?.mandateId ?? null;
 }

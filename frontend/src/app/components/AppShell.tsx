@@ -1,8 +1,6 @@
 // Persistent app shell: present on every screen — a wordmark, real nav,
-// and an always-visible identity indicator, so nothing ever renders as an
-// isolated screen floating in empty space. `identityLabel` is a
-// hardcoded placeholder until real zkLogin session data exists — see
-// App.tsx.
+// and an account icon that opens a full Settings screen (see
+// Settings.tsx) rather than a dropdown menu, so it can hold real content.
 //
 // Content width: max-w-6xl (not max-w-3xl) so a multi-column dashboard
 // grid actually uses the viewport instead of squeezing into a narrow
@@ -10,17 +8,17 @@
 
 import type { ReactNode } from "react";
 
-export type NavItem = "active" | "history";
+export type NavItem = "deals" | "mandate" | "settings";
 
 export function AppShell({
   activeNav,
   onNavChange,
-  identityLabel,
+  address,
   children,
 }: {
   activeNav: NavItem;
   onNavChange: (nav: NavItem) => void;
-  identityLabel: string;
+  address: string;
   children: ReactNode;
 }) {
   return (
@@ -34,36 +32,41 @@ export function AppShell({
             <nav className="flex items-center gap-3 text-xs sm:gap-6 sm:text-sm">
               <button
                 type="button"
-                onClick={() => onNavChange("active")}
+                onClick={() => onNavChange("deals")}
                 className={`whitespace-nowrap border-b-2 pb-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                  activeNav === "active"
+                  activeNav === "deals"
                     ? "border-vellum text-vellum"
                     : "border-transparent text-manifest hover:text-vellum"
                 }`}
               >
-                <span className="sm:hidden">Active</span>
-                <span className="hidden sm:inline">Active Deals</span>
+                Deals
               </button>
               <button
                 type="button"
-                onClick={() => onNavChange("history")}
+                onClick={() => onNavChange("mandate")}
                 className={`whitespace-nowrap border-b-2 pb-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                  activeNav === "history"
+                  activeNav === "mandate"
                     ? "border-vellum text-vellum"
                     : "border-transparent text-manifest hover:text-vellum"
                 }`}
               >
-                History
+                Mandate
               </button>
             </nav>
           </div>
 
-          <div
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border font-data text-xs text-manifest"
-            title={identityLabel}
+          <button
+            type="button"
+            onClick={() => onNavChange("settings")}
+            title={address}
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border font-data text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+              activeNav === "settings"
+                ? "border-white/30 text-vellum"
+                : "border-border text-manifest hover:border-white/30 hover:text-vellum"
+            }`}
           >
-            {identityLabel.slice(0, 1).toUpperCase()}
-          </div>
+            {address.slice(2, 3).toUpperCase()}
+          </button>
         </div>
       </header>
 
