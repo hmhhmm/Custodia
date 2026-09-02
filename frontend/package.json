@@ -12,6 +12,7 @@
   "dependencies": {
     "@mysten/dapp-kit-core": "^1.6.20",
     "@mysten/dapp-kit-react": "^2.1.22",
+    "@mysten/enoki": "^1.2.19",
     "@mysten/seal": "^1.4.6",
     "@mysten/sui": "^2.27.1",
     "motion": "^13.1.1",
