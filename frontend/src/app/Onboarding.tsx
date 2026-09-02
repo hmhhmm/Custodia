@@ -1,61 +1,86 @@
-// One-time onboarding flow, required before a deal can be created: the
-// connected wallet needs its own on-chain AgentIdentity (client_agent
-// argument to PTB #1) and a funded Mandate delegating to a specialist
-// address. Also offers registering a demo specialist agent, since
-// discoverAgents() needs at least one registered agent to find.
+// One-time onboarding flow. Only one real signature is required from the
+// connected wallet: create and fund a Mandate delegating to Envoy
+// (envoy-signer.ts's fixed demo keypair). Envoy also needs its own
+// on-chain AgentIdentity — registered once, by Envoy itself, no signature
+// from the human — because deal.move's create_and_lock_escrow requires the
+// SAME signer to both own the client AgentIdentity used in a Deal and be
+// the Mandate's delegate:
+//   - Sui itself only lets an owned object's OWNER include it as a
+//     transaction input — an AgentIdentity you own can never be passed by
+//     a transaction Envoy signs.
+//   - mandate.move separately forbids delegate == owner on the Mandate
+//     itself, so "delegate to yourself" isn't an option either.
+// The only shape that satisfies both constraints: Envoy owns its own
+// client-role AgentIdentity, and Envoy is the Mandate's delegate — the
+// human only ever funds and caps the Mandate, never touches deal creation
+// directly. See ARCHITECTURE.md / the Move contracts for the full picture.
+//
+// Registering a demo specialist is NOT part of this flow — a real user
+// should never have to seed the marketplace themselves; see the
+// discoverAgents() call in orchestrator.ts.
 
 import { useEffect, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { dAppKit } from "../sui/dapp-kit";
 import { buildRegisterAgentTx, extractRegisteredAgentFromResult, type RegisteredAgent } from "../sui/ptb-register-agent";
-import { buildCreateFundedMandateTx } from "../sui/ptb-mandate";
-import { findOwnedAgentIdentity } from "../sui/onboarding-status";
+import { buildCreateFundedMandateTx, extractMandateIdFromResult } from "../sui/ptb-mandate";
+import { findOwnedAgentIdentity, findOwnedMandate } from "../sui/onboarding-status";
+import { ENVOY_ADDRESS, envoyKeypair } from "../sui/envoy-signer";
 import type { StatusStepState } from "./types";
 
 export interface OnboardingResult {
-  clientAgent: RegisteredAgent;
-  specialistAgent: RegisteredAgent;
-  mandateCreated: boolean;
+  mandateId: string;
+}
+
+const DEFAULT_MAX_SPEND_SUI = 0.2;
+const DEFAULT_FUNDING_SUI = 0.1;
+const MANDATE_CATEGORIES = ["legal-review", "courier", "translation", "logistics", "design", "research"];
+const MANDATE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function suiToMist(sui: number): bigint {
+  return BigInt(Math.round(sui * 1_000_000_000));
+}
+
+/** Registers Envoy's own AgentIdentity if it doesn't already have one —
+ * idempotent, safe to call every time onboarding mounts. Signed by
+ * envoyKeypair, never the connected wallet. */
+async function ensureEnvoyIdentity(): Promise<RegisteredAgent> {
+  const existing = await findOwnedAgentIdentity(ENVOY_ADDRESS, "client");
+  if (existing) return existing;
+
+  const tx = buildRegisterAgentTx({
+    suinsName: `envoy-${Date.now()}.sui`,
+    capabilities: ["client"],
+  });
+  const result = await envoyKeypair.signAndExecuteTransaction({ transaction: tx, client: dAppKit.getClient() });
+  if (result.FailedTransaction) {
+    throw new Error(result.FailedTransaction.status.error?.message ?? "Envoy identity registration failed");
+  }
+  const registered = await extractRegisteredAgentFromResult(dAppKit.getClient(), result);
+  if (!registered) throw new Error("Envoy registered, but no AgentRegistered event was found to read IDs from.");
+  return registered;
 }
 
 export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResult) => void }) {
   const account = useCurrentAccount();
-  const [clientAgentStatus, setClientAgentStatus] = useState<StatusStepState>("pending");
-  const [specialistAgentStatus, setSpecialistAgentStatus] = useState<StatusStepState>("pending");
   const [mandateStatus, setMandateStatus] = useState<StatusStepState>("pending");
   const [error, setError] = useState<string | null>(null);
 
-  const [clientAgent, setClientAgent] = useState<RegisteredAgent | null>(null);
-  const [specialistAgent, setSpecialistAgent] = useState<RegisteredAgent | null>(null);
-  const [specialistOwnerAddress, setSpecialistOwnerAddress] = useState("");
+  const [mandateId, setMandateId] = useState<string | null>(null);
+  const [maxSpend, setMaxSpend] = useState(DEFAULT_MAX_SPEND_SUI);
 
-  // Reload wipes React state, but the AgentIdentity objects registered in a
-  // previous session still exist on-chain — re-check for them so the
-  // "Register" buttons don't ask you to redo work you've already done.
-  // The Mandate step is intentionally NOT auto-detected here: its delegate
-  // address is arbitrary and unknown ahead of time, so there's no reliable
-  // way to tell "already created" from "created for a different specialist"
-  // without you re-entering the delegate address anyway.
+  // Reload wipes React state, but the on-chain Mandate from a previous
+  // session still exists — re-check for it so setup doesn't ask you to
+  // redo work you've already done.
   useEffect(() => {
     if (!account) return;
     let cancelled = false;
 
-    findOwnedAgentIdentity(account.address, "client")
+    findOwnedMandate(account.address, ENVOY_ADDRESS)
       .then((found) => {
         if (cancelled || !found) return;
-        setClientAgent(found);
-        setClientAgentStatus("done");
-      })
-      .catch(() => {
-        // Best-effort — leave the step in its normal "pending" state and
-        // let the Register button work as if this check never ran.
-      });
-
-    findOwnedAgentIdentity(account.address, "legal-review")
-      .then((found) => {
-        if (cancelled || !found) return;
-        setSpecialistAgent(found);
-        setSpecialistAgentStatus("done");
+        setMandateId(found);
+        setMandateStatus("done");
       })
       .catch(() => {});
 
@@ -64,129 +89,77 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
     };
   }, [account]);
 
-  async function handleRegisterClient() {
-    setClientAgentStatus("active");
+  async function handleSetup() {
     setError(null);
-    try {
-      const tx = buildRegisterAgentTx({
-        suinsName: `client-${Date.now()}.sui`,
-        capabilities: ["client"],
-      });
-      const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
-      if (result.FailedTransaction) {
-        throw new Error(result.FailedTransaction.status.error?.message ?? "Registration failed");
-      }
-      const registered = await extractRegisteredAgentFromResult(dAppKit.getClient(), result);
-      if (!registered) throw new Error("Registered, but no AgentRegistered event was found to read IDs from.");
-      setClientAgent(registered);
-      setClientAgentStatus("done");
-    } catch (err) {
-      setClientAgentStatus("failed");
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function handleRegisterSpecialist() {
-    setSpecialistAgentStatus("active");
-    setError(null);
-    try {
-      const tx = buildRegisterAgentTx({
-        suinsName: `legal-review-${Date.now()}.sui`,
-        capabilities: ["legal-review"],
-      });
-      const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
-      if (result.FailedTransaction) {
-        throw new Error(result.FailedTransaction.status.error?.message ?? "Registration failed");
-      }
-      const registered = await extractRegisteredAgentFromResult(dAppKit.getClient(), result);
-      if (!registered) throw new Error("Registered, but no AgentRegistered event was found to read IDs from.");
-      setSpecialistAgent(registered);
-      setSpecialistAgentStatus("done");
-    } catch (err) {
-      setSpecialistAgentStatus("failed");
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function handleCreateMandate() {
-    if (!specialistOwnerAddress) {
-      setError("Enter the specialist owner's wallet address first (a Mandate cannot delegate to its own owner).");
-      return;
-    }
     setMandateStatus("active");
-    setError(null);
+
     try {
-      const tx = buildCreateFundedMandateTx({
-        delegate: specialistOwnerAddress,
-        maxSpend: 200_000_000n, // 0.2 SUI — lowered from 50 for easier testnet-faucet testing
-        allowedCategories: ["legal-review", "courier"],
-        expiresAtMs: BigInt(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        fundingAmount: 100_000_000n, // 0.1 SUI — lowered from 20 for easier testnet-faucet testing
-      });
-      const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
-      if (result.FailedTransaction) {
-        throw new Error(result.FailedTransaction.status.error?.message ?? "Mandate creation failed");
+      // Envoy needs its own AgentIdentity before it can ever create a
+      // Deal — do this first so a failure here doesn't cost you a
+      // signature for nothing.
+      await ensureEnvoyIdentity();
+
+      let id = mandateId;
+      if (!id) {
+        const tx = buildCreateFundedMandateTx({
+          delegate: ENVOY_ADDRESS,
+          maxSpend: suiToMist(maxSpend),
+          allowedCategories: MANDATE_CATEGORIES,
+          expiresAtMs: BigInt(Date.now() + MANDATE_DURATION_MS),
+          fundingAmount: suiToMist(DEFAULT_FUNDING_SUI),
+        });
+        const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
+        if (result.FailedTransaction) {
+          throw new Error(result.FailedTransaction.status.error?.message ?? "Mandate creation failed");
+        }
+        const extracted = await extractMandateIdFromResult(dAppKit.getClient(), result);
+        if (!extracted) throw new Error("Mandate created, but no MandateCreated event was found to read its ID from.");
+        id = extracted;
+        setMandateId(extracted);
       }
+
       setMandateStatus("done");
+      onComplete({ mandateId: id });
     } catch (err) {
+      console.error("Setup failed:", err);
       setMandateStatus("failed");
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  const allDone = clientAgentStatus === "done" && specialistAgentStatus === "done" && mandateStatus === "done";
-
-  function handleContinue() {
-    if (!clientAgent || !specialistAgent) return;
-    onComplete({ clientAgent, specialistAgent, mandateCreated: mandateStatus === "done" });
-  }
+  const busy = mandateStatus === "active";
 
   return (
     <div className="mx-auto max-w-xl">
       <h1 className="text-2xl font-semibold tracking-tight text-vellum">One-time setup</h1>
       <p className="mt-2 text-sm text-manifest">
-        Before you can create a deal, your wallet needs an on-chain identity and a funded Mandate —
-        these are real testnet transactions your wallet will need to sign, in order.
+        One real testnet transaction: authorize Envoy to spend on your behalf within a limit you set.
+        Envoy finds and deals with specialist agents from here on — you won't need to do this again.
       </p>
 
       <div className="mt-8 flex flex-col gap-4">
-        <OnboardingStep
-          title="Register your agent identity"
-          status={clientAgentStatus}
-          onAction={handleRegisterClient}
-          actionLabel="Register"
-          resultId={clientAgent?.agentId}
-        />
-        <OnboardingStep
-          title="Register a demo specialist (legal-review.sui)"
-          status={specialistAgentStatus}
-          onAction={handleRegisterSpecialist}
-          actionLabel="Register specialist"
-          resultId={specialistAgent?.agentId}
-        />
         <div className="rounded-lg border border-border p-5">
-          <p className="font-medium text-vellum">Create and fund a Mandate</p>
+          <label className="text-sm font-medium text-vellum" htmlFor="max-spend">
+            Envoy's spending limit
+          </label>
           <p className="mt-1 text-sm text-manifest">
-            Delegates spending authority to the specialist's OWNER wallet address (not the
-            AgentIdentity object ID above) — paste the address of whichever wallet you used to
-            register the specialist. It must differ from your own connected address; a Mandate
-            cannot delegate to its own owner.
+            The most Envoy can commit across all deals — funded with {DEFAULT_FUNDING_SUI} SUI now. This
+            is a one-time cap for this Mandate; raising it later requires a code change, not a UI action
+            yet.
           </p>
-          <input
-            type="text"
-            value={specialistOwnerAddress}
-            onChange={(e) => setSpecialistOwnerAddress(e.target.value)}
-            placeholder="0x... (specialist's owner address)"
-            className="mt-3 w-full rounded-md border border-border bg-surface px-3 py-2 font-data text-sm text-vellum placeholder:text-manifest focus:border-accent focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={handleCreateMandate}
-            disabled={mandateStatus === "active" || mandateStatus === "done"}
-            className="mt-3 rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {mandateStatus === "done" ? "Mandate created" : "Create Mandate"}
-          </button>
+          <div className="mt-3 flex items-center gap-2">
+            <input
+              id="max-spend"
+              type="number"
+              min={0.1}
+              step={0.1}
+              value={maxSpend}
+              onChange={(e) => setMaxSpend(Number(e.target.value))}
+              disabled={busy || mandateStatus === "done"}
+              className="w-32 rounded-md border border-border bg-surface px-3 py-2 font-data text-sm text-vellum focus:border-accent focus:outline-none disabled:opacity-40"
+            />
+            <span className="text-sm text-manifest">SUI</span>
+          </div>
         </div>
       </div>
 
@@ -194,43 +167,12 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
 
       <button
         type="button"
-        onClick={handleContinue}
-        disabled={!allDone}
-        className="mt-8 rounded-md border border-border px-4 py-2 text-sm font-medium text-vellum transition-colors hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={mandateId ? () => onComplete({ mandateId }) : handleSetup}
+        disabled={busy}
+        className="mt-8 rounded-md bg-white px-6 py-3 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       >
-        Continue to dashboard
+        {mandateId ? "Continue" : busy ? "Setting up…" : "Set up Custodia"}
       </button>
-    </div>
-  );
-}
-
-function OnboardingStep({
-  title,
-  status,
-  onAction,
-  actionLabel,
-  resultId,
-}: {
-  title: string;
-  status: StatusStepState;
-  onAction: () => void;
-  actionLabel: string;
-  resultId?: string;
-}) {
-  return (
-    <div className="rounded-lg border border-border p-5">
-      <div className="flex items-center justify-between">
-        <p className="font-medium text-vellum">{title}</p>
-        <button
-          type="button"
-          onClick={onAction}
-          disabled={status === "active" || status === "done"}
-          className="rounded-md border border-border px-3 py-1.5 text-sm text-vellum transition-colors hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {status === "done" ? "Done" : status === "active" ? "Signing…" : actionLabel}
-        </button>
-      </div>
-      {resultId && <p className="mt-2 truncate font-data text-xs text-manifest">agent: {resultId}</p>}
     </div>
   );
 }

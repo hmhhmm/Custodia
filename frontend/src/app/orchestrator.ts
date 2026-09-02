@@ -1,7 +1,17 @@
 // Real orchestrator driving the live status feed — every step is either
 // REAL (an on-chain call or a live third-party API) or SCRIPTED (no real
-// counterparty exists yet), labeled inline below. PTB steps require the
-// connected wallet to actually hold SUI and a Mandate to draw from.
+// counterparty exists yet), labeled inline below.
+//
+// Signer model (see Onboarding.tsx's header for the full why): the "client"
+// AgentIdentity on every Deal is Envoy's OWN identity, not the connected
+// human wallet's. Sui only lets an owned object's owner pass it as a tx
+// input, and mandate.move forbids a Mandate delegating to its own owner —
+// so the only signer that can satisfy both "owns the client AgentIdentity"
+// and "is the Mandate's delegate" is Envoy itself. That means every PTB
+// touching the client side of a Deal (create, verify+release) is signed by
+// envoyKeypair, never the connected wallet. The human wallet's only
+// on-chain role is the Mandate it created once during onboarding — funding
+// and capping what Envoy can spend, never signing a deal directly.
 //
 // Step-by-step reality:
 //   1. searching / candidate-found — REAL: discoverAgents() against the
@@ -11,23 +21,24 @@
 //      specialist reply (specialist-stand-ins.ts) — there is no real
 //      autonomous counterparty agent to negotiate with.
 //   3. mandate-check / escrow-locked — REAL PTB: custodia::deal::create_and_share
-//      (ptb-escrow.ts). Requires a real Mandate owned by the connected
-//      account, with enough custodied `funds` and an `allowed_categories`
-//      entry matching step 2's category exactly (case-sensitive). The
-//      client's AgentIdentity/Reputation IDs come from the `onboarding`
-//      param (Onboarding.tsx) — an address is not an object ID. There is
-//      no UI to create a Mandate other than the Onboarding screen, so
-//      this step fails for any account that skipped it.
+//      (ptb-escrow.ts), using onboarding.mandateId and Envoy's own
+//      AgentIdentity (looked up fresh — see ensureEnvoyIdentity in
+//      Onboarding.tsx). Signed by envoyKeypair.
 //   4. work-in-progress — REAL: Seal-encrypts the deliverable, then
 //      uploads the ciphertext via Walrus storeBlob().
 //   5. verification — REAL call to the honestly-labeled Nautilus mock
 //      (mockNautilusAttest()).
 //   6. payment-released / reputation-updated — REAL PTBs: accept
-//      (ptb-accept.ts), mark_delivered (ptb-deliver.ts), then
-//      verify_and_release (ptb-release.ts, using onboarding.clientAgent's
-//      IDs and the discovered candidate's reputationId).
+//      (ptb-accept.ts), mark_delivered (ptb-deliver.ts) — both signed by
+//      specialistKeypair, since deal.move requires the specialist
+//      AgentIdentity's actual owner to sign, and the scripted specialist is
+//      still not a real counterparty agent — then verify_and_release
+//      (ptb-release.ts), signed by envoyKeypair since it owns the client
+//      AgentIdentity used throughout this Deal.
 
 import { dAppKit } from "../sui/dapp-kit";
+import { envoyKeypair, ENVOY_ADDRESS } from "../sui/envoy-signer";
+import { specialistKeypair, SPECIALIST_ADDRESS } from "../sui/specialist-signer";
 import { discoverAgents } from "../agent/discovery";
 import { interpretGoal } from "../agent/llm";
 import { scriptedSpecialistReply, scriptedDeliverable } from "../agent/specialist-stand-ins";
@@ -39,6 +50,7 @@ import { buildCreateDealAllowlistTx, extractAllowlistIdFromEffects } from "../su
 import { buildAcceptDealTx } from "../sui/ptb-accept";
 import { buildMarkDeliveredTx } from "../sui/ptb-deliver";
 import { buildVerifyAndReleaseTx } from "../sui/ptb-release";
+import { findOwnedAgentIdentity } from "../sui/onboarding-status";
 import type { OnboardingResult } from "./Onboarding";
 import type { DealReceipt, StatusStep } from "./types";
 
@@ -94,12 +106,20 @@ export async function runOrchestratedDeal(
     fail(0, `Goal interpretation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const candidates = await discoverAgents({ capability: interpreted.category });
+  // Filtered to SPECIALIST_ADDRESS: deal.move requires the specialist
+  // AgentIdentity's actual owner to sign accept()/mark_delivered(), and
+  // specialistKeypair is the only specialist identity this demo can
+  // actually sign as (see scripts/seed-specialist.mjs). A real discovery
+  // flow would pick the best-ranked candidate regardless of owner and hand
+  // signing off to that agent's own service — not buildable here since
+  // there's no real counterparty agent yet.
+  const allCandidates = await discoverAgents({ capability: interpreted.category });
+  const candidates = allCandidates.filter((c) => c.owner === SPECIALIST_ADDRESS);
 
   if (candidates.length === 0) {
     fail(
       1,
-      `No agents registered on-chain for category "${interpreted.category}" — the AgentRegistry is genuinely empty right now. Register a demo agent via custodia::agent_identity::register_and_keep before this can find a real candidate.`,
+      `No signable demo specialist registered for category "${interpreted.category}" — run scripts/seed-specialist.mjs first.`,
     );
   }
 
@@ -123,14 +143,16 @@ export async function runOrchestratedDeal(
   await wait(STEP_DELAY_MS);
 
   // --- Steps 3-4: REAL PTB #1 -------------------------------------------
-  // Requires a real Mandate owned by connectedAddress — throws for any
-  // account without one (created via the Onboarding screen).
-  const mandateId = import.meta.env.VITE_DEMO_MANDATE_ID;
-  if (!mandateId) {
-    fail(
-      3,
-      "No Mandate configured (VITE_DEMO_MANDATE_ID is unset) — a real Mandate object must exist and be owned by the connected wallet before PTB #1 can run. There is no UI to create one yet.",
-    );
+  // onboarding.mandateId was created once during Onboarding.tsx, delegating
+  // to Envoy. Signed by envoyKeypair, not the connected wallet — see the
+  // file header. Envoy's own AgentIdentity was registered once during
+  // onboarding too (ensureEnvoyIdentity) — look it up fresh rather than
+  // threading it through OnboardingResult, since it's Envoy's, not tied to
+  // any particular user session.
+  const mandateId = onboarding.mandateId;
+  const envoyAgent = await findOwnedAgentIdentity(ENVOY_ADDRESS, "client");
+  if (!envoyAgent) {
+    fail(3, "Envoy has no registered AgentIdentity yet — this should have been created during onboarding.");
   }
 
   steps[3].state = "done";
@@ -142,14 +164,14 @@ export async function runOrchestratedDeal(
   try {
     const tx = buildLockEscrowAndCreateDealTx({
       mandateId,
-      clientAgentIdentityId: onboarding.clientAgent.agentId,
+      clientAgentIdentityId: envoyAgent.agentId,
       specialistAgentId: candidate.agentId,
       category: interpreted.category,
       amount: BigInt(Math.round(interpreted.maxBudget * 1_000_000_000)),
       deliveryWindowMs: BigInt(24 * 60 * 60 * 1000),
       reviewWindowMs: BigInt(24 * 60 * 60 * 1000),
     });
-    const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
+    const result = await envoyKeypair.signAndExecuteTransaction({ transaction: tx, client: dAppKit.getClient() });
     if (result.FailedTransaction) {
       throw new Error(result.FailedTransaction.status.error?.message ?? "PTB #1 failed");
     }
@@ -233,7 +255,7 @@ export async function runOrchestratedDeal(
       deliveryDeadlineMs: BigInt(Date.now() + 24 * 60 * 60 * 1000),
       amount: BigInt(Math.round(interpreted.maxBudget * 1_000_000_000)),
     });
-    await dAppKit.signAndExecuteTransaction({ transaction: acceptTx });
+    await specialistKeypair.signAndExecuteTransaction({ transaction: acceptTx, client: dAppKit.getClient() });
 
     const deliverTx = buildMarkDeliveredTx({
       dealId,
@@ -241,15 +263,18 @@ export async function runOrchestratedDeal(
       storageId: blobId,
       attestationId: attestation.attestationId,
     });
-    await dAppKit.signAndExecuteTransaction({ transaction: deliverTx });
+    await specialistKeypair.signAndExecuteTransaction({ transaction: deliverTx, client: dAppKit.getClient() });
 
     const releaseTx = buildVerifyAndReleaseTx({
       dealId,
-      clientAgentIdentityId: onboarding.clientAgent.agentId,
-      clientReputationId: onboarding.clientAgent.reputationId,
+      clientAgentIdentityId: envoyAgent.agentId,
+      clientReputationId: envoyAgent.reputationId,
       specialistReputationId: candidate.reputationId,
     });
-    const releaseResult = await dAppKit.signAndExecuteTransaction({ transaction: releaseTx });
+    const releaseResult = await envoyKeypair.signAndExecuteTransaction({
+      transaction: releaseTx,
+      client: dAppKit.getClient(),
+    });
     if (releaseResult.FailedTransaction) {
       throw new Error(releaseResult.FailedTransaction.status.error?.message ?? "PTB #2 failed");
     }

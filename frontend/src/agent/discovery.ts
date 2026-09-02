@@ -53,6 +53,7 @@ interface AgentSummaryJson {
 
 export interface DiscoveredAgent {
   agentId: string;
+  owner: string;
   reputationId: string;
   suinsName: string;
   nameVerified: boolean;
@@ -115,6 +116,7 @@ export async function discoverAgents(params: {
 
   const candidates: DiscoveredAgent[] = filtered.map((a) => ({
     agentId: a.agent_id,
+    owner: a.owner,
     reputationId: a.reputation_id,
     suinsName: a.suins_name,
     nameVerified: a.name_verified,
