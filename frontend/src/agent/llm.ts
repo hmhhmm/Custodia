@@ -92,9 +92,14 @@ User's goal: "${goal}"`;
     category: obj.category as (typeof MANDATE_CATEGORIES)[number],
     // Hard clamp — the prompt asks Gemini to respect the cap, but nothing
     // stops it from ignoring that instruction, so this is the real
-    // enforcement point. A tiny floor keeps a 0-or-negative guess from
-    // producing a zero-amount PTB (deal.move's EZeroAmount).
-    maxBudget: Math.min(Math.max(obj.maxBudget, 0.01), maxBudgetSui),
+    // enforcement point. Math.min is applied LAST and outermost, so the
+    // 0.000001 floor (keeps a 0-or-negative guess from producing a
+    // zero-amount PTB — deal.move's EZeroAmount) can never push the
+    // result above maxBudgetSui even when the ceiling itself is very
+    // small — orchestrator.ts had exactly this bug the other way around
+    // (a 0.01 floor on the ceiling, not the value, which raised the
+    // ceiling above what was actually spendable).
+    maxBudget: Math.min(Math.max(obj.maxBudget, 0.000001), maxBudgetSui),
     description: obj.description,
   };
 }

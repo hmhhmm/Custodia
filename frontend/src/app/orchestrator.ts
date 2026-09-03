@@ -117,7 +117,20 @@ export async function runOrchestratedDeal(
   }
   const remainingAuthorizedMist = mandate.maxSpendMist - mandate.spentSoFarMist;
   const spendableMist = remainingAuthorizedMist < mandate.fundsMist ? remainingAuthorizedMist : mandate.fundsMist;
-  const budgetCeilingSui = Math.max(0.01, (Number(spendableMist) / 1_000_000_000) * 0.9);
+  // NOTE: no Math.max floor here — a floor would (and, in an earlier
+  // version of this code, did) raise the ceiling back ABOVE what's
+  // actually spendable once the Mandate ran low on funds, defeating the
+  // whole point of this clamp and reproducing EInsufficientMandateFunds.
+  // If there's truly nothing left to spend, fail with a clear message
+  // instead of silently permitting an over-budget amount.
+  const budgetCeilingSui = (Number(spendableMist) / 1_000_000_000) * 0.9;
+
+  if (budgetCeilingSui < 0.001) {
+    fail(
+      0,
+      `The connected Mandate has almost nothing left to spend (${(Number(spendableMist) / 1_000_000_000).toFixed(4)} SUI remaining) — fund it further or create a new Mandate.`,
+    );
+  }
 
   let interpreted;
   try {
@@ -294,6 +307,16 @@ export async function runOrchestratedDeal(
     if (acceptResult.FailedTransaction) {
       throw new Error(acceptResult.FailedTransaction.status.error?.message ?? "accept() failed");
     }
+    // The next PTB re-fetches the Deal's current object/status to build
+    // mark_delivered — accept()'s executeTransaction resolving does not
+    // guarantee that read sees accept()'s effects yet (testnet's fullnode
+    // gateway fronts multiple nodes with no cross-request read-your-writes
+    // guarantee). Without this wait, mark_delivered could be built against a
+    // node that still reports the pre-accept "Escrowed" status, so
+    // assert_transition(Escrowed -> Delivered) aborts with EInvalidTransition
+    // even though accept() genuinely succeeded — this was confirmed on-chain
+    // (deal stuck at Accepted, mark_delivered aborting every time).
+    await dAppKit.getClient().core.waitForTransaction({ result: acceptResult });
 
     const deliverTx = buildMarkDeliveredTx({
       dealId,
@@ -308,6 +331,9 @@ export async function runOrchestratedDeal(
     if (deliverResult.FailedTransaction) {
       throw new Error(deliverResult.FailedTransaction.status.error?.message ?? "mark_delivered() failed");
     }
+    // Same cross-request read-after-write gap as above, between
+    // mark_delivered and verify_and_release.
+    await dAppKit.getClient().core.waitForTransaction({ result: deliverResult });
 
     const releaseTx = buildVerifyAndReleaseTx({
       dealId,
