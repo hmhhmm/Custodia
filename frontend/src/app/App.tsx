@@ -13,6 +13,7 @@ import { Landing } from "./Landing";
 import { Onboarding, type OnboardingResult } from "./Onboarding";
 import { Dashboard } from "./Dashboard";
 import { MandateView } from "./MandateView";
+import { SpecialistOnboarding } from "./SpecialistOnboarding";
 import { ChatPanel } from "./ChatPanel";
 import { ProgressView } from "./ProgressView";
 import { Receipt } from "./Receipt";
@@ -206,6 +207,11 @@ export function App() {
         {nav === "mandate" && (
           <ScreenTransition key="mandate">
             <MandateView />
+          </ScreenTransition>
+        )}
+        {nav === "specialist" && (
+          <ScreenTransition key="specialist">
+            <SpecialistOnboarding />
           </ScreenTransition>
         )}
       </AnimatePresence>

@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useCurrentWallet, useCurrentNetwork, useDAppKit } from "@mysten/dapp-kit-react";
 
-export type NavItem = "chat" | "deals" | "mandate";
+export type NavItem = "chat" | "deals" | "mandate" | "specialist";
 
 function truncateAddress(address: string): string {
   return `${address.slice(0, 8)}…${address.slice(-6)}`;
@@ -43,6 +43,7 @@ export function AppShell({
               <NavLink label="Chat" active={activeNav === "chat"} onClick={() => onNavChange("chat")} />
               <NavLink label="Deals" active={activeNav === "deals"} onClick={() => onNavChange("deals")} />
               <NavLink label="Mandate" active={activeNav === "mandate"} onClick={() => onNavChange("mandate")} />
+              <NavLink label="Specialist" active={activeNav === "specialist"} onClick={() => onNavChange("specialist")} />
             </nav>
           </div>
 
