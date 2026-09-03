@@ -26,6 +26,24 @@ function suiToMist(sui: number): bigint {
   return BigInt(Math.round(sui * 1_000_000_000));
 }
 
+function MandateIdCopy({ mandateId }: { mandateId: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard.writeText(mandateId);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+      title="Click to copy"
+      className="min-w-0 max-w-[60%] truncate rounded-md px-1.5 py-0.5 font-data text-xs text-manifest hover:bg-surface-hover hover:text-vellum"
+    >
+      {copied ? "Copied" : mandateId}
+    </button>
+  );
+}
+
 function NewMandateForm({ onCreated }: { onCreated: (mandate: MandateDetails) => void }) {
   const [maxSpend, setMaxSpend] = useState(DEFAULT_MAX_SPEND_SUI);
   const [busy, setBusy] = useState(false);
@@ -69,11 +87,7 @@ function NewMandateForm({ onCreated }: { onCreated: (mandate: MandateDetails) =>
   return (
     <div className="rounded-lg border border-border p-5">
       <p className="text-sm font-medium text-vellum">Fund a new Mandate</p>
-      <p className="mt-1 text-sm text-manifest">
-        Authorizes Envoy to spend up to a new limit, funded with {DEFAULT_FUNDING_SUI} SUI from your connected
-        wallet — the same one-time transaction as initial setup. Use this to top up once the current Mandate
-        runs low.
-      </p>
+      <p className="mt-1 text-sm text-manifest">Top up Envoy's spending limit with {DEFAULT_FUNDING_SUI} SUI from your wallet.</p>
       <div className="mt-3 flex items-center gap-2">
         <input
           type="number"
@@ -183,6 +197,11 @@ export function MandateView() {
           />
         </div>
         <p className="mt-2 text-sm text-manifest">{formatSui(remaining)} remaining</p>
+
+        <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+          <span className="text-xs text-manifest">Mandate ID</span>
+          <MandateIdCopy mandateId={mandate.mandateId} />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -196,7 +215,7 @@ export function MandateView() {
           <p className="mt-1 font-data text-lg text-vellum">
             {expiresDate.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
           </p>
-          <p className="mt-1 text-xs text-manifest">{isExpired ? "This Mandate has expired" : "Still valid"}</p>
+          <p className="mt-1 text-xs text-manifest">{isExpired ? "Expired" : "Still valid"}</p>
         </div>
       </div>
 
@@ -210,8 +229,6 @@ export function MandateView() {
           ))}
         </div>
       </div>
-
-      <p className="font-data text-xs text-manifest">Mandate ID: {mandate.mandateId}</p>
 
       <NewMandateForm onCreated={(created) => setMandate(created)} />
     </div>

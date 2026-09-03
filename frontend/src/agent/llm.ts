@@ -103,3 +103,32 @@ User's goal: "${goal}"`;
     description: obj.description,
   };
 }
+
+/**
+ * Turns a deal's raw category + escrowed amount into a short, human title
+ * for the Deals tab card — e.g. "Rental Lease Review" instead of a bare
+ * category tag + a wall of hex addresses. Falls back to the category
+ * itself (still real, just less polished) if Gemini isn't reachable —
+ * never blocks the card from rendering on a network hiccup.
+ */
+export async function summarizeDealTitle(category: string, amountSui: number): Promise<string> {
+  if (!GEMINI_API_KEY) return category;
+
+  const prompt = `Give a short, professional title (4-6 words, title case, no quotes, no trailing punctuation) for a paid task in the category "${category}" with a budget of ${amountSui} SUI. Respond with ONLY the title text, nothing else.`;
+
+  try {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    if (!response.ok) return category;
+
+    const result = await response.json();
+    const text: string | undefined = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const cleaned = text?.trim().replace(/^["']|["']$/g, "");
+    return cleaned || category;
+  } catch {
+    return category;
+  }
+}

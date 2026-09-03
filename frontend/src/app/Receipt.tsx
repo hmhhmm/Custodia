@@ -2,7 +2,7 @@
 // deals" lands on a dashboard that now includes this deal. See App.tsx for
 // how the new DealSummary gets appended.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CurrentAccountSigner, type DAppKit } from "@mysten/dapp-kit-core";
 import { dAppKit } from "../sui/dapp-kit";
 import { readBlob } from "../verification/walrus";
@@ -19,26 +19,32 @@ export function Receipt({
   const [deliverableText, setDeliverableText] = useState<string | null>(null);
   const [decryptStatus, setDecryptStatus] = useState<"idle" | "loading" | "error">("idle");
   const [decryptError, setDecryptError] = useState<string | null>(null);
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
+  const [fileStatus, setFileStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  function makeSigner() {
+    // CurrentAccountSigner's constructor param type is hard-coded to
+    // DAppKit<[]> (an empty tuple) rather than the module-augmented
+    // Register['dAppKit'] type dapp-kit.ts declares — a real typing gap
+    // in @mysten/dapp-kit-core, not a mistake here (our dAppKit
+    // genuinely satisfies the same shape at runtime; only the networks
+    // tuple's literal type differs). VERIFY this cast is still needed
+    // next time @mysten/dapp-kit-core is upgraded.
+    return new CurrentAccountSigner(dAppKit as unknown as DAppKit);
+  }
 
   async function handleViewDeliverable() {
     setDecryptStatus("loading");
     setDecryptError(null);
     try {
       const encrypted = await readBlob(receipt.deliverable.blobId);
-      // CurrentAccountSigner's constructor param type is hard-coded to
-      // DAppKit<[]> (an empty tuple) rather than the module-augmented
-      // Register['dAppKit'] type dapp-kit.ts declares — a real typing gap
-      // in @mysten/dapp-kit-core, not a mistake here (our dAppKit
-      // genuinely satisfies the same shape at runtime; only the networks
-      // tuple's literal type differs). VERIFY this cast is still needed
-      // next time @mysten/dapp-kit-core is upgraded.
-      const signer = new CurrentAccountSigner(dAppKit as unknown as DAppKit);
       const decrypted = await decryptDealContent(
         encrypted,
         dAppKit.getClient(),
         receipt.deliverable.allowlistId,
         receipt.deliverable.seedId,
-        signer,
+        makeSigner(),
       );
       setDeliverableText(new TextDecoder().decode(decrypted));
       setDecryptStatus("idle");
@@ -47,6 +53,39 @@ export function Receipt({
       setDecryptError(err instanceof Error ? err.message : String(err));
     }
   }
+
+  async function handleDecryptFile() {
+    const file = receipt.deliverable.file;
+    if (!file) return;
+    setFileStatus("loading");
+    setFileError(null);
+    try {
+      const encrypted = await readBlob(file.blobId);
+      const decrypted = await decryptDealContent(
+        encrypted,
+        dAppKit.getClient(),
+        receipt.deliverable.allowlistId,
+        file.seedId,
+        makeSigner(),
+      );
+      // Copy into a plain ArrayBuffer-backed view before constructing the
+      // Blob — same defensive pattern used elsewhere in this codebase
+      // (walrus.ts, nautilus.mock.ts) since typed arrays over
+      // ArrayBufferLike aren't always accepted by BlobPart's type.
+      const blob = new Blob([new Uint8Array(decrypted)], { type: file.mimeType });
+      setFileUrl(URL.createObjectURL(blob));
+      setFileStatus("idle");
+    } catch (err) {
+      setFileStatus("error");
+      setFileError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (fileUrl) URL.revokeObjectURL(fileUrl);
+    };
+  }, [fileUrl]);
 
   return (
     <div className="flex flex-col items-center py-8 text-center">
@@ -91,6 +130,32 @@ export function Receipt({
         )}
         {decryptStatus === "error" && <p className="mt-2 text-sm text-wax">{decryptError}</p>}
       </div>
+
+      {receipt.deliverable.file && (
+        <div className="mt-4 w-full max-w-md rounded-lg border border-border p-5 text-left">
+          <p className="font-medium text-vellum">Attached file</p>
+          <p className="mt-1 truncate text-sm text-manifest">{receipt.deliverable.file.name}</p>
+          {fileUrl ? (
+            <a
+              href={fileUrl}
+              download={receipt.deliverable.file.name}
+              className="mt-3 inline-block rounded-md border border-border px-3 py-1.5 text-sm text-vellum transition-colors hover:border-white/30"
+            >
+              Download
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={handleDecryptFile}
+              disabled={fileStatus === "loading"}
+              className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm text-vellum transition-colors hover:border-white/30 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {fileStatus === "loading" ? "Decrypting…" : "Decrypt and download"}
+            </button>
+          )}
+          {fileStatus === "error" && <p className="mt-2 text-sm text-wax">{fileError}</p>}
+        </div>
+      )}
 
       {receipt.explorerUrl && (
         <a
