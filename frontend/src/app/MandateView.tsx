@@ -6,6 +6,13 @@ import { useEffect, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
 import { findMandateDetails, type MandateDetails } from "../sui/onboarding-status";
 import { ENVOY_ADDRESS } from "../sui/envoy-signer";
+import { dAppKit } from "../sui/dapp-kit";
+import { buildCreateFundedMandateTx, extractMandateIdFromResult } from "../sui/ptb-mandate";
+import { MANDATE_CATEGORIES } from "./Onboarding";
+
+const DEFAULT_MAX_SPEND_SUI = 0.2;
+const DEFAULT_FUNDING_SUI = 0.1;
+const MANDATE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function mistToSui(mist: bigint): number {
   return Number(mist) / 1_000_000_000;
@@ -13,6 +20,83 @@ function mistToSui(mist: bigint): number {
 
 function formatSui(mist: bigint): string {
   return `${mistToSui(mist).toLocaleString(undefined, { maximumFractionDigits: 4 })} SUI`;
+}
+
+function suiToMist(sui: number): bigint {
+  return BigInt(Math.round(sui * 1_000_000_000));
+}
+
+function NewMandateForm({ onCreated }: { onCreated: (mandate: MandateDetails) => void }) {
+  const [maxSpend, setMaxSpend] = useState(DEFAULT_MAX_SPEND_SUI);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleCreate() {
+    setBusy(true);
+    setError(null);
+    try {
+      const tx = buildCreateFundedMandateTx({
+        delegate: ENVOY_ADDRESS,
+        maxSpend: suiToMist(maxSpend),
+        allowedCategories: [...MANDATE_CATEGORIES],
+        expiresAtMs: BigInt(Date.now() + MANDATE_DURATION_MS),
+        fundingAmount: suiToMist(DEFAULT_FUNDING_SUI),
+      });
+      const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
+      if (result.FailedTransaction) {
+        throw new Error(result.FailedTransaction.status.error?.message ?? "Mandate creation failed");
+      }
+      const mandateId = await extractMandateIdFromResult(dAppKit.getClient(), result);
+      if (!mandateId) throw new Error("Mandate created, but no MandateCreated event was found to read its ID from.");
+      onCreated({
+        mandateId,
+        delegate: ENVOY_ADDRESS,
+        maxSpendMist: suiToMist(maxSpend),
+        spentSoFarMist: 0n,
+        fundsMist: suiToMist(DEFAULT_FUNDING_SUI),
+        allowedCategories: [...MANDATE_CATEGORIES],
+        expiresAtMs: Date.now() + MANDATE_DURATION_MS,
+        revoked: false,
+      });
+    } catch (err) {
+      console.error("Mandate creation failed:", err);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border p-5">
+      <p className="text-sm font-medium text-vellum">Fund a new Mandate</p>
+      <p className="mt-1 text-sm text-manifest">
+        Authorizes Envoy to spend up to a new limit, funded with {DEFAULT_FUNDING_SUI} SUI from your connected
+        wallet — the same one-time transaction as initial setup. Use this to top up once the current Mandate
+        runs low.
+      </p>
+      <div className="mt-3 flex items-center gap-2">
+        <input
+          type="number"
+          min={0.1}
+          step={0.1}
+          value={maxSpend}
+          onChange={(e) => setMaxSpend(Number(e.target.value))}
+          disabled={busy}
+          className="w-32 rounded-md border border-border bg-surface px-3 py-2 font-data text-sm text-vellum focus:border-accent focus:outline-none disabled:opacity-40"
+        />
+        <span className="text-sm text-manifest">SUI limit</span>
+        <button
+          type="button"
+          onClick={handleCreate}
+          disabled={busy}
+          className="ml-auto rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busy ? "Creating…" : "Create Mandate"}
+        </button>
+      </div>
+      {error && <p className="mt-3 text-sm text-wax">{error}</p>}
+    </div>
+  );
 }
 
 export function MandateView() {
@@ -58,10 +142,11 @@ export function MandateView() {
 
   if (status === "none" || !mandate) {
     return (
-      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+      <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 sm:px-6 sm:py-10">
         <div className="rounded-lg border border-dashed border-border py-16 text-center">
           <p className="text-manifest">No Mandate found for this account.</p>
         </div>
+        <NewMandateForm onCreated={(created) => { setMandate(created); setStatus("found"); }} />
       </div>
     );
   }
@@ -127,6 +212,8 @@ export function MandateView() {
       </div>
 
       <p className="font-data text-xs text-manifest">Mandate ID: {mandate.mandateId}</p>
+
+      <NewMandateForm onCreated={(created) => setMandate(created)} />
     </div>
   );
 }

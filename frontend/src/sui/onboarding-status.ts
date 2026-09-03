@@ -139,15 +139,16 @@ export async function findOwnedAgentIdentity(
   return null;
 }
 
-/** Finds the full on-chain state of a non-revoked Mandate whose Move-level
+/** Finds the on-chain state of every non-revoked Mandate whose Move-level
  * `owner` field is `owner` and whose `delegate` is `delegate` (Envoy's
- * fixed demo address). Returns null if none exists yet.
+ * fixed demo address) — a wallet can have several (e.g. after using the
+ * Mandate tab's "Fund a new Mandate" once the original ran low).
  *
  * Scans every shared Mandate on the package, not just this owner's — there
  * is no owner-indexed query for shared objects (see GetSharedMandatesQuery
  * above). Fine at hackathon scale; would need a real indexer (see the
  * accessing-data skill) if the Mandate count ever grows large. */
-export async function findMandateDetails(owner: string, delegate: string): Promise<MandateDetails | null> {
+export async function findAllMandateDetails(owner: string, delegate: string): Promise<MandateDetails[]> {
   const result = await client.query({
     query: GetSharedMandatesQuery,
     variables: { type: `${PACKAGE_ID}::mandate::Mandate` },
@@ -156,10 +157,11 @@ export async function findMandateDetails(owner: string, delegate: string): Promi
     throw new Error(`Shared Mandate query failed: ${JSON.stringify(result.errors)}`);
   }
   const nodes = result.data?.objects?.nodes ?? [];
+  const matches: MandateDetails[] = [];
   for (const node of nodes) {
     const json = node?.asMoveObject?.contents?.json as MandateJson | undefined;
     if (node?.address && json && !json.revoked && json.owner === owner && json.delegate === delegate) {
-      return {
+      matches.push({
         mandateId: node.address,
         delegate: json.delegate,
         maxSpendMist: BigInt(json.max_spend),
@@ -168,10 +170,26 @@ export async function findMandateDetails(owner: string, delegate: string): Promi
         allowedCategories: json.allowed_categories,
         expiresAtMs: Number(json.expires_at),
         revoked: json.revoked,
-      };
+      });
     }
   }
-  return null;
+  return matches;
+}
+
+/** The single Mandate to actually use — whichever of `owner`'s Mandates
+ * has the most real spendable room (min(max_spend - spent_so_far, funds)),
+ * not just "the first one found". Without this, a wallet with several
+ * Mandates (one drained, one freshly funded) could keep resolving to the
+ * drained one depending on query result order. Returns null if none
+ * exists yet. */
+export async function findMandateDetails(owner: string, delegate: string): Promise<MandateDetails | null> {
+  const all = await findAllMandateDetails(owner, delegate);
+  if (all.length === 0) return null;
+  return all.reduce((best, current) => {
+    const bestSpendable = best.maxSpendMist - best.spentSoFarMist < best.fundsMist ? best.maxSpendMist - best.spentSoFarMist : best.fundsMist;
+    const currentSpendable = current.maxSpendMist - current.spentSoFarMist < current.fundsMist ? current.maxSpendMist - current.spentSoFarMist : current.fundsMist;
+    return currentSpendable > bestSpendable ? current : best;
+  });
 }
 
 /** Finds a non-revoked Mandate owned by `owner` delegating to `delegate`
