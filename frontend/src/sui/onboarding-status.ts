@@ -114,14 +114,10 @@ function readMistValue(raw: unknown): bigint {
   return 0n;
 }
 
-/** Finds an AgentIdentity owned by `owner` with the given capability tag
- * (e.g. "client" or "legal-review") — there is no registry index by owner,
- * so this scans the (small, per-wallet) set of AgentIdentity objects
- * directly. Returns the first match, or null if none exists yet. */
-export async function findOwnedAgentIdentity(
-  owner: string,
-  capability: string,
-): Promise<RegisteredAgent | null> {
+/** Finds every AgentIdentity owned by `owner` — there is no registry index
+ * by owner, so this scans the (small, per-wallet) set of AgentIdentity
+ * objects directly. */
+export async function findOwnedAgentIdentities(owner: string): Promise<(RegisteredAgent & { capabilities: string[] })[]> {
   const result = await client.query({
     query: GetOwnedAgentIdentitiesQuery,
     variables: { owner, type: `${PACKAGE_ID}::agent_identity::AgentIdentity` },
@@ -130,13 +126,25 @@ export async function findOwnedAgentIdentity(
     throw new Error(`Owned AgentIdentity query failed: ${JSON.stringify(result.errors)}`);
   }
   const nodes = result.data?.address?.objects?.nodes ?? [];
+  const found: (RegisteredAgent & { capabilities: string[] })[] = [];
   for (const node of nodes) {
     const json = node?.contents?.json as AgentIdentityJson | undefined;
-    if (node?.address && json?.capabilities?.includes(capability)) {
-      return { agentId: node.address, reputationId: json.reputation_id };
+    if (node?.address && json) {
+      found.push({ agentId: node.address, reputationId: json.reputation_id, capabilities: json.capabilities });
     }
   }
-  return null;
+  return found;
+}
+
+/** Finds an AgentIdentity owned by `owner` with the given capability tag
+ * (e.g. "client" or "legal-review"). Returns the first match, or null if
+ * none exists yet. */
+export async function findOwnedAgentIdentity(
+  owner: string,
+  capability: string,
+): Promise<RegisteredAgent | null> {
+  const all = await findOwnedAgentIdentities(owner);
+  return all.find((a) => a.capabilities.includes(capability)) ?? null;
 }
 
 /** Finds the on-chain state of every non-revoked Mandate whose Move-level

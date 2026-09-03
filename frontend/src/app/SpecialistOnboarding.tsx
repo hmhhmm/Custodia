@@ -14,6 +14,7 @@ import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { buildRegisterAgentTx, extractRegisteredAgentFromResult, type RegisteredAgent } from "../sui/ptb-register-agent";
 import { findOwnedAgentIdentity } from "../sui/onboarding-status";
 import { MANDATE_CATEGORIES } from "./Onboarding";
+import { SpecialistInbox } from "./SpecialistInbox";
 
 export function SpecialistOnboarding() {
   const account = useCurrentAccount();
@@ -72,15 +73,15 @@ export function SpecialistOnboarding() {
 
   if (!account) {
     return (
-      <div className="mx-auto max-w-2xl px-4 py-8 sm:px-6 sm:py-10">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
         <p className="text-sm text-manifest">Connect a wallet to register as a specialist.</p>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-8 sm:px-6 sm:py-10">
-      <div>
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
+      <div className="mb-8 max-w-2xl">
         <h1 className="text-2xl font-semibold tracking-tight text-vellum">Become a specialist</h1>
         <p className="mt-2 text-sm text-manifest">
           Register this connected wallet as a real specialist agent — a genuine counterparty other clients'
@@ -92,19 +93,20 @@ export function SpecialistOnboarding() {
       {status === "loading" && <p className="text-sm text-manifest">Checking this account…</p>}
 
       {status === "ready" && existing && (
-        <div className="rounded-lg border border-border p-5">
-          <p className="text-sm font-medium text-vellum">You're already registered</p>
-          <p className="mt-2 font-data text-xs text-manifest">Agent ID: {existing.agentId}</p>
-          <p className="mt-1 font-data text-xs text-manifest">Reputation ID: {existing.reputationId}</p>
-          <p className="mt-3 text-sm text-manifest">
-            Incoming deal requests naming this agent will show up here once the specialist inbox is built —
-            for now, this confirms the account is live on-chain and discoverable.
-          </p>
+        <div className="mb-10 rounded-xl border border-border bg-surface p-6 sm:flex sm:items-center sm:justify-between sm:gap-6">
+          <div className="min-w-0">
+            <p className="flex items-center gap-2 text-sm font-medium text-vellum">
+              <span className="text-emerald-500">✓</span>
+              You're already registered
+            </p>
+            <p className="mt-2 truncate font-data text-xs text-manifest">Agent ID: {existing.agentId}</p>
+            <p className="mt-1 truncate font-data text-xs text-manifest">Reputation ID: {existing.reputationId}</p>
+          </div>
         </div>
       )}
 
       {status === "ready" && !existing && (
-        <div className="rounded-lg border border-border p-5">
+        <div className="mb-10 max-w-2xl rounded-xl border border-border bg-surface p-6">
           <label className="text-sm font-medium text-vellum" htmlFor="suins-name">
             Display name
           </label>
@@ -116,7 +118,7 @@ export function SpecialistOnboarding() {
             onChange={(e) => setSuinsName(e.target.value)}
             placeholder="legal-review-yourname.sui"
             disabled={busy}
-            className="mt-3 w-full rounded-md border border-border bg-surface px-3 py-2 font-data text-sm text-vellum focus:border-accent focus:outline-none disabled:opacity-40"
+            className="mt-3 w-full rounded-md border border-border bg-ink px-3 py-2 font-data text-sm text-vellum focus:border-accent focus:outline-none disabled:opacity-40"
           />
 
           <label className="mt-4 block text-sm font-medium text-vellum" htmlFor="category">
@@ -128,7 +130,7 @@ export function SpecialistOnboarding() {
             value={category}
             onChange={(e) => setCategory(e.target.value as (typeof MANDATE_CATEGORIES)[number])}
             disabled={busy}
-            className="mt-3 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-vellum focus:border-accent focus:outline-none disabled:opacity-40"
+            className="mt-3 w-full rounded-md border border-border bg-ink px-3 py-2 text-sm text-vellum focus:border-accent focus:outline-none disabled:opacity-40"
           >
             {MANDATE_CATEGORIES.map((c) => (
               <option key={c} value={c}>
@@ -149,6 +151,8 @@ export function SpecialistOnboarding() {
           {error && <p className="mt-3 text-sm text-wax">{error}</p>}
         </div>
       )}
+
+      {status === "ready" && existing && <SpecialistInbox />}
     </div>
   );
 }

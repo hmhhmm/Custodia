@@ -131,3 +131,31 @@ export async function discoverAgents(params: {
 
   return aboveThreshold.sort((a, b) => b.reputationScore - a.reputationScore);
 }
+
+/** Looks up a single agent's registry entry by its own AgentIdentity object
+ * id — used to reconstruct a deal's specialist owner/reputation from just
+ * a dealId after a page refresh (see release.ts's reconstructPendingRelease),
+ * since that information isn't stored anywhere except the registry itself. */
+export async function findAgentById(agentId: string): Promise<DiscoveredAgent | null> {
+  const registryResult = await client.query({
+    query: GetRegistryQuery,
+    variables: { registryId: AGENT_REGISTRY_ID },
+  });
+  if (registryResult.errors?.length) {
+    throw new Error(`AgentRegistry query failed: ${JSON.stringify(registryResult.errors)}`);
+  }
+  const registryJson = registryResult.data?.object?.asMoveObject?.contents?.json as
+    | { agents: AgentSummaryJson[] }
+    | undefined;
+  const found = (registryJson?.agents ?? []).find((a) => a.agent_id === agentId);
+  if (!found) return null;
+  return {
+    agentId: found.agent_id,
+    owner: found.owner,
+    reputationId: found.reputation_id,
+    suinsName: found.suins_name,
+    nameVerified: found.name_verified,
+    capabilities: found.capabilities,
+    reputationScore: 0,
+  };
+}
