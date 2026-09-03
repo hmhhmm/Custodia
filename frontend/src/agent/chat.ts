@@ -90,7 +90,7 @@ function toGeminiContents(history: ChatMessage[]): { role: "user" | "model"; par
 /**
  * Sends the full conversation to Gemini and returns either a plain-text
  * reply or a start_deal tool call. Does not execute the deal itself — the
- * caller (ChatPanel.tsx) is responsible for invoking runOrchestratedDeal
+ * caller (ChatPanel.tsx) is responsible for invoking createDealAndEscrow
  * and feeding progress back into the chat.
  */
 export async function sendChatTurn(history: ChatMessage[]): Promise<ChatTurnResult> {

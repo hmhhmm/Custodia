@@ -16,39 +16,15 @@ import { MandateView } from "./MandateView";
 import { SpecialistOnboarding } from "./SpecialistOnboarding";
 import { ChatPanel } from "./ChatPanel";
 import { ProgressView } from "./ProgressView";
+import { StepList } from "./StatusFeed";
 import { Receipt } from "./Receipt";
 import { findOwnedMandate } from "../sui/onboarding-status";
 import { ENVOY_ADDRESS } from "../sui/envoy-signer";
-import type { ConversationTurn, DealReceipt, DealSummary } from "./types";
+import { loadChatHistory, saveChatHistory } from "./chat-local-history";
+import type { ConversationTurn, DealReceipt } from "./types";
+import { GENERAL_THREAD_ID } from "./types";
 
 type Screen = "checking" | "onboarding" | "app" | "receipt";
-
-const SEED_DEALS: DealSummary[] = [
-  {
-    dealId: "demo-1",
-    counterpartyName: "translate-agent.sui",
-    amount: 8,
-    status: "released",
-    category: "Translation",
-    description: "Translated onboarding docs into Spanish and French.",
-  },
-  {
-    dealId: "demo-2",
-    counterpartyName: "legal-review.sui",
-    amount: 12,
-    status: "escrowed",
-    category: "Legal",
-    description: "Reviewing a vendor contract for indemnity clauses.",
-  },
-  {
-    dealId: "demo-3",
-    counterpartyName: "courier-dispatch.sui",
-    amount: 4,
-    status: "released",
-    category: "Logistics",
-    description: "Same-day courier quote and pickup scheduling.",
-  },
-];
 
 function ScreenTransition({ children }: { children: React.ReactNode }) {
   return (
@@ -70,12 +46,16 @@ export function App() {
   const authenticated = account !== null;
   const [nav, setNav] = useState<NavItem>("chat");
   const [screen, setScreen] = useState<Screen>("checking");
-  const [deals, setDeals] = useState<DealSummary[]>(SEED_DEALS);
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [viewingDealId, setViewingDealId] = useState<string | null>(null);
+  const [viewingChainDealId, setViewingChainDealId] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<DealReceipt | null>(null);
-  const [lastTask, setLastTask] = useState("");
   const [onboarding, setOnboarding] = useState<OnboardingResult | null>(null);
+  // Which chat thread is open — GENERAL_THREAD_ID or a deal's own id. See
+  // ChatThreadSidebar.tsx for the real thread-history model this drives;
+  // this is what makes "Return to chat" from a specific deal reopen THAT
+  // deal's own thread instead of always landing on one flat list.
+  const [activeThreadId, setActiveThreadId] = useState<string>(GENERAL_THREAD_ID);
 
   // Re-derive whether onboarding was already completed from the chain —
   // a Mandate is a permanent on-chain fact, so a page refresh shouldn't
@@ -99,8 +79,35 @@ export function App() {
     };
   }, [account]);
 
-  function handleDealComplete(finalReceipt: DealReceipt, task: string) {
-    setLastTask(task);
+  // Chat history lived only in React memory before this — any refresh (or
+  // "Return to chat" after one) silently landed on a blank conversation
+  // even though nothing about the underlying deals had changed. Restore
+  // it per-wallet on connect, and mirror every change back to
+  // localStorage so it survives the next refresh too.
+  //
+  // historyLoadedFor guards the save effect below: on the very first
+  // render after connecting, `turns` is still its useState([]) initial
+  // value — the load effect calls setTurns(loaded) but that doesn't
+  // synchronously update `turns` inside THIS render, so without this
+  // guard the save effect fired on that same render with the stale empty
+  // `turns` and immediately overwrote the real saved history with `[]`,
+  // permanently wiping it on every fresh connect. Only start saving once
+  // a load has actually completed for the current address.
+  const [historyLoadedFor, setHistoryLoadedFor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!account) return;
+    setTurns(loadChatHistory(account.address));
+    setHistoryLoadedFor(account.address);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account?.address]);
+
+  useEffect(() => {
+    if (!account || historyLoadedFor !== account.address) return;
+    saveChatHistory(account.address, turns);
+  }, [account, turns, historyLoadedFor]);
+
+  function handleDealComplete(finalReceipt: DealReceipt) {
     setReceipt(finalReceipt);
     setScreen("receipt");
   }
@@ -109,24 +116,16 @@ export function App() {
     setViewingDealId(dealTurnId);
   }
 
+  function handleOpenChainDeal(dealId: string) {
+    setViewingChainDealId(dealId);
+  }
+
   function handleBackToDeals() {
-    if (receipt) {
-      setDeals((prev) => [
-        {
-          dealId: receipt.dealId,
-          counterpartyName: receipt.counterpartyName,
-          amount: receipt.amount,
-          status: "released",
-          // The deal card's category doesn't yet have a real on-chain
-          // source; falling back to a generic label and the raw task text.
-          category: "General",
-          description: lastTask,
-        },
-        ...prev,
-      ]);
-    }
+    // The "Completed" list is chain-derived (Dashboard re-fetches from
+    // findDealsForClient on mount) — nothing to append manually here
+    // anymore, the just-released deal will simply show up with status
+    // Released next time Dashboard reads chain.
     setReceipt(null);
-    setLastTask("");
     setScreen("app");
     setNav("deals");
   }
@@ -177,8 +176,25 @@ export function App() {
 
   function handleNavChange(next: NavItem) {
     setViewingDealId(null);
+    setViewingChainDealId(null);
     setNav(next);
   }
+
+  /** Opens Chat on a SPECIFIC thread — the real fix for "Return to chat
+   * opens a new/blank conversation": every "Return to chat" action now
+   * passes the deal's own thread id (falling back to General only when
+   * there's genuinely no specific deal in context), so it continues
+   * exactly where that conversation left off. */
+  function handleReturnToChat(threadId: string) {
+    setActiveThreadId(threadId);
+    handleNavChange("chat");
+  }
+
+  const viewingDealIdResolved = viewingDeal?.pending?.dealId ?? viewingChainDealId;
+  // A live turn opened before escrow locks has no on-chain dealId yet
+  // (still searching/negotiating) — still worth opening, just with the
+  // live step feed only, no on-chain status panel until escrow exists.
+  const viewingPreEscrowTurn = viewingDeal && !viewingDeal.pending ? viewingDeal : null;
 
   return (
     <AppShell activeNav={nav} onNavChange={handleNavChange} address={account.address}>
@@ -190,18 +206,59 @@ export function App() {
               onboarding={onboarding}
               turns={turns}
               onTurnsChange={setTurns}
-              onDealComplete={handleDealComplete}
+              onDealReleased={handleDealComplete}
+              activeThreadId={activeThreadId}
+              onSelectThread={setActiveThreadId}
+              onThreadCreated={(threadId) => setActiveThreadId(threadId)}
             />
           </ScreenTransition>
         )}
-        {nav === "deals" && viewingDeal && (
+        {nav === "deals" && viewingDealIdResolved && (
           <ScreenTransition key="progress">
-            <ProgressView turn={viewingDeal} onBack={() => setViewingDealId(null)} />
+            <ProgressView
+              dealId={viewingDealIdResolved}
+              turn={viewingDeal}
+              onBack={() => {
+                setViewingDealId(null);
+                setViewingChainDealId(null);
+              }}
+              onReturnToChat={() => handleReturnToChat(viewingDeal?.id ?? GENERAL_THREAD_ID)}
+              onReleased={(finalReceipt) => {
+                if (viewingDeal) {
+                  setTurns((prev) =>
+                    prev.map((t) => (t.kind === "deal" && t.id === viewingDeal.id ? { ...t, receipt: finalReceipt } : t)),
+                  );
+                }
+                handleDealComplete(finalReceipt);
+              }}
+            />
           </ScreenTransition>
         )}
-        {nav === "deals" && !viewingDeal && (
+        {nav === "deals" && !viewingDealIdResolved && viewingPreEscrowTurn && (
+          <ScreenTransition key="pre-escrow">
+            <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
+              <button
+                type="button"
+                onClick={() => setViewingDealId(null)}
+                className="mb-6 text-sm text-manifest transition-colors hover:text-vellum"
+              >
+                ← Back to deals
+              </button>
+              <p className="mb-2 text-xs uppercase tracking-wider text-manifest">Task</p>
+              <p className="mb-8 text-lg font-medium text-vellum">{viewingPreEscrowTurn.task}</p>
+              <StepList steps={viewingPreEscrowTurn.steps} />
+            </div>
+          </ScreenTransition>
+        )}
+        {nav === "deals" && !viewingDealIdResolved && !viewingPreEscrowTurn && (
           <ScreenTransition key="deals">
-            <Dashboard deals={deals} turns={turns} onNewDeal={() => handleNavChange("chat")} onOpenDeal={handleOpenDeal} />
+            <Dashboard
+              turns={turns}
+              onNewDeal={() => handleReturnToChat(GENERAL_THREAD_ID)}
+              onOpenDeal={handleOpenDeal}
+              onOpenChainDeal={handleOpenChainDeal}
+              onReturnToChat={handleReturnToChat}
+            />
           </ScreenTransition>
         )}
         {nav === "mandate" && (

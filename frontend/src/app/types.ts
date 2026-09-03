@@ -53,7 +53,15 @@ export interface DealReceipt {
    * `seedId` is the exact Seal identity used at encrypt time ([allowlist
    * id][random nonce], hex) and must be passed back unchanged to
    * decryptDealContent() — it cannot be re-derived from allowlistId alone. */
-  deliverable: { blobId: string; allowlistId: string; seedId: string };
+  deliverable: {
+    blobId: string;
+    allowlistId: string;
+    seedId: string;
+    /** Set only when the specialist attached a file (see
+     * ptb-deliver.ts's DeliveryExtra) — its own independent Walrus blob +
+     * Seal seed, separate from the deliverable text's. */
+    file?: { blobId: string; seedId: string; name: string; mimeType: string };
+  };
 }
 
 /** Row shown on the dashboard's deal history. A deliberately smaller
@@ -87,7 +95,36 @@ export interface AttachmentInfo {
   previewUrl?: string;
 }
 
+/** Everything the client side (Envoy, on the connected wallet's behalf)
+ * needs to call verify_and_release later, once a real specialist has
+ * accepted and delivered via their own inbox — set once escrow locks,
+ * read again whenever the release button is used. */
+export interface PendingRelease {
+  dealId: string;
+  counterpartyName: string;
+  amountSui: number;
+  clientAgentIdentityId: string;
+  clientReputationId: string;
+  specialistReputationId: string;
+  /** The wallet address that owns the specialist's AgentIdentity — where
+   * payment actually lands. Used to verify the release really moved funds
+   * (see release.ts), not just that the transaction didn't abort. */
+  specialistOwnerAddress: string;
+  allowlistId: string;
+  seedId: string;
+}
+
+/** Every turn belongs to a thread — "general" for plain conversation, or a
+ * deal's own `id` once a message turns out to have started one. This is
+ * set retroactively: the LLM only reveals "this was a deal" after the
+ * fact (see ChatPanel.tsx's handleSubmit), so the triggering user message
+ * is re-tagged with the deal's thread id the moment that's known, moving
+ * it out of "general" into that deal's own thread. Real chat-history
+ * management (per-deal threads + one ongoing general thread), not a
+ * single endless list — see ChatThreadList.tsx. */
+export const GENERAL_THREAD_ID = "general";
+
 export type ConversationTurn =
-  | { kind: "text"; role: "user" | "assistant"; text: string; attachment?: AttachmentInfo }
-  | { kind: "deal"; id: string; task: string; steps: StatusStep[]; receipt: DealReceipt | null }
-  | { kind: "error"; text: string };
+  | { kind: "text"; role: "user" | "assistant"; text: string; attachment?: AttachmentInfo; threadId: string }
+  | { kind: "deal"; id: string; task: string; steps: StatusStep[]; receipt: DealReceipt | null; pending: PendingRelease | null; threadId: string }
+  | { kind: "error"; text: string; threadId: string };

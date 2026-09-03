@@ -14,11 +14,15 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, LayoutGroup } from "motion/react";
 import { sendChatTurn, type ChatMessage, type ChatAttachment } from "../agent/chat";
-import { runOrchestratedDeal } from "./orchestrator";
+import { createDealAndEscrow } from "./orchestrator";
+import { releaseDeal } from "./release";
+import { findDealById, type DealStatusName } from "../sui/deal-queries";
 import type { OnboardingResult } from "./Onboarding";
-import type { AttachmentInfo, ConversationTurn, DealReceipt } from "./types";
+import type { AttachmentInfo, ConversationTurn, DealReceipt, PendingRelease, StatusStep } from "./types";
+import { GENERAL_THREAD_ID } from "./types";
 import { StepList } from "./StatusFeed";
 import { Markdown } from "./components/Markdown";
+import { ChatThreadSidebar } from "./ChatThreadSidebar";
 
 // SpeechRecognition (and its instance methods/events) isn't part of
 // TypeScript's standard DOM lib yet. SpeechRecognitionEvent already is
@@ -113,13 +117,33 @@ export function ChatPanel({
   onboarding,
   turns,
   onTurnsChange,
-  onDealComplete,
+  onDealReleased,
+  activeThreadId,
+  onSelectThread,
+  onThreadCreated,
 }: {
   connectedAddress: string | undefined;
   onboarding: OnboardingResult;
   turns: ConversationTurn[];
   onTurnsChange: (update: (prev: ConversationTurn[]) => ConversationTurn[]) => void;
-  onDealComplete: (receipt: DealReceipt, task: string) => void;
+  onDealReleased: (receipt: DealReceipt) => void;
+  /** Which thread is currently open — GENERAL_THREAD_ID or a deal's own
+   * id (see types.ts's ConversationTurn.threadId). Controlled by App.tsx
+   * so the Deals tab's "Return to chat" can open a SPECIFIC deal's
+   * thread, not just the one flat list — this is the real fix for
+   * "Return to chat opens a new/blank conversation instead of continuing
+   * the one that was there": there wasn't a concept of separate threads
+   * before, so "the chat" was always just whatever was in the single
+   * array, and any deal in progress got mixed in with everything else. */
+  activeThreadId: string;
+  /** Sidebar thread click / "New chat" — switches which thread is shown
+   * without leaving the Chat tab. */
+  onSelectThread: (threadId: string) => void;
+  /** Called once, the moment a message turns out to have started a deal
+   * — lets App.tsx register the new thread in its sidebar list under a
+   * real title immediately, not just whenever Dashboard happens to
+   * re-derive deals from chain. */
+  onThreadCreated: (threadId: string, title: string) => void;
 }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -127,7 +151,8 @@ export function ChatPanel({
   const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const started = turns.length > 0;
+  const threadTurns = turns.filter((t) => t.threadId === activeThreadId);
+  const started = threadTurns.length > 0;
   const speech = useSpeechToText((transcript) => {
     setInput((prev) => (prev.trim().length > 0 ? `${prev} ${transcript}` : transcript));
   });
@@ -136,12 +161,17 @@ export function ChatPanel({
   // shouldn't replay it. mountedTurnCountRef freezes at first paint's
   // length, so anything already present when this component mounted
   // never animates; newTurnIndexRef tracks the single most-recently-
-  // appended index so only that one bubble reveals.
-  const mountedTurnCountRef = useRef(turns.length);
+  // appended index so only that one bubble reveals. Keyed per-thread so
+  // switching threads resets which turns count as "already there".
+  const mountedTurnCountRef = useRef(threadTurns.length);
+  useEffect(() => {
+    mountedTurnCountRef.current = threadTurns.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThreadId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [turns]);
+  }, [threadTurns.length]);
 
   // Revoke the pending-attachment preview's object URL if the component
   // unmounts (e.g. navigating away) while a file is still staged but
@@ -154,7 +184,9 @@ export function ChatPanel({
   }, []);
 
   function history(): ChatMessage[] {
-    return turns
+    // Only this thread's own messages — a deal's thread shouldn't see
+    // unrelated general chat as context, and vice versa.
+    return threadTurns
       .filter((t): t is Extract<ConversationTurn, { kind: "text" }> => t.kind === "text")
       .map((t) => ({ role: t.role, text: t.text }));
   }
@@ -198,9 +230,13 @@ export function ChatPanel({
     setInput("");
     setPendingFile(null);
     const sentText = trimmed.length > 0 ? trimmed : `Attached: ${pendingFile?.file.name}`;
+    // Sent from whichever thread is currently open. If this turns out to
+    // start a deal, this same turn is retroactively re-tagged to that
+    // deal's own thread id below — the LLM only reveals "this was a deal"
+    // after the fact, so there's no way to know the real thread up front.
     onTurnsChange((prev) => [
       ...prev,
-      { kind: "text", role: "user", text: sentText, attachment: turnAttachment },
+      { kind: "text", role: "user", text: sentText, attachment: turnAttachment, threadId: activeThreadId },
     ]);
     setBusy(true);
 
@@ -211,30 +247,46 @@ export function ChatPanel({
       ]);
 
       if (result.kind === "reply") {
-        onTurnsChange((prev) => [...prev, { kind: "text", role: "assistant", text: result.text }]);
+        onTurnsChange((prev) => [...prev, { kind: "text", role: "assistant", text: result.text, threadId: activeThreadId }]);
         setBusy(false);
         return;
       }
 
       // result.kind === "start_deal" — hand off to the real orchestrator,
-      // rendering its live steps inline as this turn progresses.
+      // rendering its live steps inline as this turn progresses. This only
+      // runs the client side through escrow lock — a real specialist then
+      // has to accept/deliver from their own inbox (SpecialistInbox.tsx)
+      // before this deal can be released, so it does NOT finish in one
+      // synchronous call anymore. Once escrowed, the Deals tab takes over
+      // (polls live status, shows the Verify & Release button).
       const dealId = crypto.randomUUID();
-      onTurnsChange((prev) => [...prev, { kind: "deal", id: dealId, task: result.task, steps: [], receipt: null }]);
+      // Move the triggering message into this deal's own thread (see the
+      // header note above) and add the deal turn under the same thread —
+      // this is what makes "one thread per deal" real: everything about
+      // this deal, including the message that started it, lives together.
+      onTurnsChange((prev) => [
+        ...prev.map((t) =>
+          t.kind === "text" && t.threadId === activeThreadId && t.text === sentText && t.role === "user"
+            ? { ...t, threadId: dealId }
+            : t,
+        ),
+        { kind: "deal", id: dealId, task: result.task, steps: [], receipt: null, pending: null, threadId: dealId },
+      ]);
+      onThreadCreated(dealId, result.task);
 
-      runOrchestratedDeal(result.task, connectedAddress, onboarding, {
-        onStepsChange: (nextSteps) => {
+      createDealAndEscrow(result.task, connectedAddress, onboarding, {
+        onStepsChange: (nextSteps: StatusStep[]) => {
           onTurnsChange((prev) =>
             prev.map((t) => (t.kind === "deal" && t.id === dealId ? { ...t, steps: nextSteps } : t)),
           );
         },
-        onComplete: (receipt) => {
+        onEscrowed: (pending: PendingRelease) => {
           onTurnsChange((prev) =>
-            prev.map((t) => (t.kind === "deal" && t.id === dealId ? { ...t, receipt } : t)),
+            prev.map((t) => (t.kind === "deal" && t.id === dealId ? { ...t, pending } : t)),
           );
-          onDealComplete(receipt, result.task);
           setBusy(false);
         },
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         // The failing step's own detail already carries the specific
         // reason (see fail() in orchestrator.ts and StepList's rendering
         // of it) — this just unblocks the input again rather than
@@ -245,6 +297,7 @@ export function ChatPanel({
             kind: "text",
             role: "assistant",
             text: `That didn't go through: ${err instanceof Error ? err.message : String(err)}`,
+            threadId: dealId,
           },
         ]);
         setBusy(false);
@@ -252,7 +305,7 @@ export function ChatPanel({
     } catch (err) {
       onTurnsChange((prev) => [
         ...prev,
-        { kind: "error", text: err instanceof Error ? err.message : String(err) },
+        { kind: "error", text: err instanceof Error ? err.message : String(err), threadId: activeThreadId },
       ]);
       setBusy(false);
     }
@@ -355,9 +408,16 @@ export function ChatPanel({
   );
 
   return (
-    <LayoutGroup>
-      <div className="flex h-full flex-col">
-        {!started ? (
+    <div className="flex h-full">
+      <ChatThreadSidebar
+        turns={turns}
+        activeThreadId={activeThreadId}
+        onSelectThread={onSelectThread}
+        onNewChat={() => onSelectThread(GENERAL_THREAD_ID)}
+      />
+      <LayoutGroup>
+        <div className="flex h-full min-w-0 flex-1 flex-col">
+          {!started ? (
           <motion.div layout className="flex h-full flex-col items-center justify-center px-4 pb-[18vh]">
             <motion.p layout className="text-3xl font-normal text-vellum sm:text-4xl">
               What do you need done?
@@ -372,7 +432,7 @@ export function ChatPanel({
               <div className="mx-auto max-w-3xl">
                 <AnimatePresence initial={false}>
                   <div className="flex flex-col gap-5 py-6">
-                    {turns.map((turn, i) => (
+                    {threadTurns.map((turn, i) => (
                       <motion.div
                         key={i}
                         layout
@@ -389,7 +449,20 @@ export function ChatPanel({
                           />
                         )}
                         {turn.kind === "error" && <MessageBubble role="assistant" text={turn.text} isError />}
-                        {turn.kind === "deal" && <DealProgress task={turn.task} steps={turn.steps} />}
+                        {turn.kind === "deal" && (
+                          <DealProgress
+                            task={turn.task}
+                            steps={turn.steps}
+                            pending={turn.pending}
+                            receipt={turn.receipt}
+                            onReleased={(receipt) => {
+                              onTurnsChange((prev) =>
+                                prev.map((t) => (t.kind === "deal" && t.id === turn.id ? { ...t, receipt } : t)),
+                              );
+                              onDealReleased(receipt);
+                            }}
+                          />
+                        )}
                       </motion.div>
                     ))}
                   </div>
@@ -404,22 +477,129 @@ export function ChatPanel({
               </motion.form>
             </div>
           </>
-        )}
-      </div>
-    </LayoutGroup>
+          )}
+        </div>
+      </LayoutGroup>
+    </div>
   );
 }
+
+const POLL_INTERVAL_MS = 4000;
+
+// orchestrator.ts's static step array indices: 0 searching, 1
+// candidate-found, 2 negotiating, 3 mandate-check, 4 escrow-locked, 5
+// work-in-progress, 6 verification, 7 payment-released, 8
+// reputation-updated. Hoisted module-level (not per-render) since these
+// never change.
+const LIVE_STATUS_STEP_INDEX: Partial<Record<DealStatusName, number>> = {
+  Escrowed: 5,
+  Accepted: 5,
+  Delivered: 6,
+  Verified: 7,
+  Released: 8,
+  Settled: 8,
+};
+const LIVE_STATUS_LABEL: Partial<Record<DealStatusName, string>> = {
+  Escrowed: "Waiting for the specialist to accept…",
+  Accepted: "Accepted — waiting for delivery…",
+  Delivered: "Delivered — ready to verify and release",
+  Verified: "Verified",
+  Released: "Payment released",
+  Settled: "Settled",
+};
 
 /** ChatGPT-style collapsible tool-call indicator: expanded with full step
  * detail while a deal is running or just failed, auto-collapses to a
  * one-line summary a moment after it finishes successfully. Always
- * re-openable by clicking the summary line. */
-function DealProgress({ task, steps }: { task: string; steps: import("./types").StatusStep[] }) {
+ * re-openable by clicking the summary line.
+ *
+ * Once escrow locks (`pending` is set), this polls the deal's REAL
+ * on-chain status — the static `steps` array orchestrator.ts hands back
+ * stops at "waiting for specialist" and never updates again, since a real
+ * specialist accepts/delivers from their own separate browser session.
+ * Without this poll, the chat bubble stayed frozen on "Waiting for
+ * specialist" forever even after the specialist had actually delivered —
+ * ProgressView already polled correctly; this brings the inline chat view
+ * in sync with the same live signal instead of showing a second,
+ * disagreeing story. */
+function DealProgress({
+  task,
+  steps,
+  pending,
+  receipt,
+  onReleased,
+}: {
+  task: string;
+  steps: StatusStep[];
+  pending: PendingRelease | null;
+  receipt: DealReceipt | null;
+  onReleased: (receipt: DealReceipt) => void;
+}) {
   const [expanded, setExpanded] = useState(true);
   const [autoCollapsed, setAutoCollapsed] = useState(false);
-  const allDone = steps.length > 0 && steps.every((s) => s.state === "done");
+  const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
+  const [releasing, setReleasing] = useState(false);
+  const [releaseError, setReleaseError] = useState<string | null>(null);
+
   const failed = steps.some((s) => s.state === "failed");
-  const active = steps.find((s) => s.state === "active");
+
+  useEffect(() => {
+    if (!pending || receipt) return;
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const deal = await findDealById(pending!.dealId);
+        if (!cancelled && deal) setLiveStatus(deal.status);
+      } catch {
+        // Transient GraphQL hiccup — next poll tick will retry.
+      }
+    }
+
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [pending, receipt]);
+
+  // Once escrow locks, orchestrator.ts's static steps stop at
+  // "work-in-progress" (labeled "Waiting for specialist") and never
+  // change again — it has no way to know what a real specialist does in
+  // their own separate session. Rather than bolt a second, separately
+  // worded status panel underneath the frozen list (which is what
+  // produced the contradiction: list says "Waiting for specialist" while
+  // a panel below says "Delivered, ready to release"), overlay liveStatus
+  // onto the SAME steps array so there is exactly one story on screen.
+  const displaySteps: StatusStep[] = (() => {
+    if (!pending || !liveStatus) return steps;
+    const targetIndex = LIVE_STATUS_STEP_INDEX[liveStatus];
+    if (targetIndex === undefined) return steps;
+    return steps.map((step, i) => {
+      if (i < targetIndex) return step.state === "done" ? step : { ...step, state: "done" as const };
+      if (i === targetIndex) {
+        return {
+          ...step,
+          state: liveStatus === "Released" || liveStatus === "Settled" ? ("done" as const) : ("active" as const),
+          detail: LIVE_STATUS_LABEL[liveStatus] ?? step.detail,
+        };
+      }
+      return step.state === "pending" ? step : { ...step, state: "pending" as const, detail: undefined };
+    });
+  })();
+
+  // Never declare "Done" while any step the user can see is still
+  // pending/active — this exact contradiction ("Done" banner over an
+  // incomplete step list) was reported live. displaySteps is the single
+  // rendered source of truth, so gate on it directly rather than trusting
+  // receipt/liveStatus alone to agree with what's on screen.
+  // NOTE: "no pending yet" means escrow hasn't even locked — that is the
+  // OPPOSITE of done, not a done state, so it must never appear in this
+  // OR chain (a real bug this same file had until this fix: `|| !pending`
+  // made a barely-started deal show "Done" before escrow even existed).
+  const allStepsDone = displaySteps.length > 0 && displaySteps.every((s) => s.state === "done");
+  const allDone = allStepsDone && (Boolean(receipt) || liveStatus === "Released" || liveStatus === "Settled");
 
   useEffect(() => {
     if (allDone && !autoCollapsed) {
@@ -431,13 +611,27 @@ function DealProgress({ task, steps }: { task: string; steps: import("./types").
     }
   }, [allDone, autoCollapsed]);
 
+  async function handleRelease() {
+    if (!pending) return;
+    setReleasing(true);
+    setReleaseError(null);
+    try {
+      const finalReceipt = await releaseDeal(pending);
+      onReleased(finalReceipt);
+    } catch (err) {
+      setReleaseError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReleasing(false);
+    }
+  }
+
   const summary = failed
     ? "Something went wrong"
     : allDone
       ? "Done"
-      : active
-        ? active.label
-        : "Working…";
+      : pending && liveStatus
+        ? (LIVE_STATUS_LABEL[liveStatus] ?? "Working…")
+        : displaySteps.find((s) => s.state === "active")?.label ?? "Working…";
 
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface">
@@ -465,7 +659,21 @@ function DealProgress({ task, steps }: { task: string; steps: import("./types").
           >
             <div className="border-t border-border px-4 py-4">
               <p className="mb-4 text-xs text-manifest">Task: {task}</p>
-              <StepList steps={steps} />
+              <StepList steps={displaySteps} />
+
+              {pending && !receipt && liveStatus === "Delivered" && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <button
+                    type="button"
+                    onClick={handleRelease}
+                    disabled={releasing}
+                    className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {releasing ? "Releasing…" : "Verify & Release Payment"}
+                  </button>
+                  {releaseError && <p className="mt-2 text-sm text-wax">{releaseError}</p>}
+                </div>
+              )}
             </div>
           </motion.div>
         )}
