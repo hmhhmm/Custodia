@@ -1,8 +1,9 @@
-// Top-level screen router for the Custodia UI. Dashboard-first structure:
-// the persistent AppShell wraps every screen, and "New deal" is an action
-// reached from the dashboard rather than a standalone flow. Auth is a
-// minimal gate before the shell renders (real zkLogin sign-in is not yet
-// wired; wallet connect via Landing's ConnectButton is the real path in).
+// Top-level screen router for the Custodia UI. Chat is the home tab —
+// every load after onboarding lands there, the same way ChatGPT/Claude
+// open to a fresh conversation. Deals and Mandate are secondary
+// destinations reached via AppShell's nav. Receipt is the one screen that
+// sits outside the nav entirely: a one-off completion moment shown right
+// after a deal finishes, not something you navigate back to.
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
@@ -12,14 +13,14 @@ import { Landing } from "./Landing";
 import { Onboarding, type OnboardingResult } from "./Onboarding";
 import { Dashboard } from "./Dashboard";
 import { MandateView } from "./MandateView";
-import { Settings } from "./Settings";
 import { ChatPanel } from "./ChatPanel";
+import { ProgressView } from "./ProgressView";
 import { Receipt } from "./Receipt";
 import { findOwnedMandate } from "../sui/onboarding-status";
 import { ENVOY_ADDRESS } from "../sui/envoy-signer";
-import type { DealReceipt, DealSummary } from "./types";
+import type { ConversationTurn, DealReceipt, DealSummary } from "./types";
 
-type Screen = "checking" | "onboarding" | "dashboard" | "chat" | "receipt";
+type Screen = "checking" | "onboarding" | "app" | "receipt";
 
 const SEED_DEALS: DealSummary[] = [
   {
@@ -55,6 +56,7 @@ function ScreenTransition({ children }: { children: React.ReactNode }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.18, ease: "easeOut" }}
+      className="h-full"
     >
       {children}
     </motion.div>
@@ -65,9 +67,11 @@ export function App() {
   const account = useCurrentAccount();
   const { status } = useWalletConnection();
   const authenticated = account !== null;
-  const [nav, setNav] = useState<NavItem>("deals");
+  const [nav, setNav] = useState<NavItem>("chat");
   const [screen, setScreen] = useState<Screen>("checking");
   const [deals, setDeals] = useState<DealSummary[]>(SEED_DEALS);
+  const [turns, setTurns] = useState<ConversationTurn[]>([]);
+  const [viewingDealId, setViewingDealId] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<DealReceipt | null>(null);
   const [lastTask, setLastTask] = useState("");
   const [onboarding, setOnboarding] = useState<OnboardingResult | null>(null);
@@ -82,7 +86,7 @@ export function App() {
     findOwnedMandate(account.address, ENVOY_ADDRESS)
       .then((mandateId) => {
         if (cancelled) return;
-        setScreen(mandateId ? "dashboard" : "onboarding");
+        setScreen(mandateId ? "app" : "onboarding");
         if (mandateId) setOnboarding({ mandateId });
       })
       .catch(() => {
@@ -94,14 +98,14 @@ export function App() {
     };
   }, [account]);
 
-  function handleNewDeal() {
-    setScreen("chat");
-  }
-
   function handleDealComplete(finalReceipt: DealReceipt, task: string) {
     setLastTask(task);
     setReceipt(finalReceipt);
     setScreen("receipt");
+  }
+
+  function handleOpenDeal(dealTurnId: string) {
+    setViewingDealId(dealTurnId);
   }
 
   function handleBackToDeals() {
@@ -122,7 +126,8 @@ export function App() {
     }
     setReceipt(null);
     setLastTask("");
-    setScreen("dashboard");
+    setScreen("app");
+    setNav("deals");
   }
 
   if (status === "reconnecting") {
@@ -148,47 +153,59 @@ export function App() {
     return <ReconnectingScreen label="Checking your account…" />;
   }
 
+  if (screen === "onboarding") {
+    return (
+      <Onboarding
+        onComplete={(result) => {
+          setOnboarding(result);
+          setScreen("app");
+        }}
+      />
+    );
+  }
+
+  if (screen === "receipt" && receipt) {
+    return (
+      <div className="min-h-screen bg-ink px-4 py-8 sm:px-6 sm:py-10">
+        <Receipt receipt={receipt} onBackToDeals={handleBackToDeals} />
+      </div>
+    );
+  }
+
+  const viewingDeal = turns.find((t): t is Extract<ConversationTurn, { kind: "deal" }> => t.kind === "deal" && t.id === viewingDealId);
+
+  function handleNavChange(next: NavItem) {
+    setViewingDealId(null);
+    setNav(next);
+  }
+
   return (
-    <AppShell activeNav={nav} onNavChange={setNav} address={account.address}>
+    <AppShell activeNav={nav} onNavChange={handleNavChange} address={account.address}>
       <AnimatePresence mode="wait">
-        {screen === "onboarding" && (
-          <ScreenTransition key="onboarding">
-            <Onboarding
-              onComplete={(result) => {
-                setOnboarding(result);
-                setScreen("dashboard");
-              }}
-            />
-          </ScreenTransition>
-        )}
-        {screen === "dashboard" && nav === "deals" && (
-          <ScreenTransition key="dashboard">
-            <Dashboard deals={deals} onNewDeal={handleNewDeal} />
-          </ScreenTransition>
-        )}
-        {screen === "dashboard" && nav === "mandate" && (
-          <ScreenTransition key="mandate">
-            <MandateView />
-          </ScreenTransition>
-        )}
-        {screen === "dashboard" && nav === "settings" && (
-          <ScreenTransition key="settings">
-            <Settings address={account.address} />
-          </ScreenTransition>
-        )}
-        {screen === "chat" && onboarding && (
+        {nav === "chat" && onboarding && (
           <ScreenTransition key="chat">
             <ChatPanel
               connectedAddress={account.address}
               onboarding={onboarding}
+              turns={turns}
+              onTurnsChange={setTurns}
               onDealComplete={handleDealComplete}
-              onBack={() => setScreen("dashboard")}
             />
           </ScreenTransition>
         )}
-        {screen === "receipt" && receipt && (
-          <ScreenTransition key="receipt">
-            <Receipt receipt={receipt} onBackToDeals={handleBackToDeals} />
+        {nav === "deals" && viewingDeal && (
+          <ScreenTransition key="progress">
+            <ProgressView turn={viewingDeal} onBack={() => setViewingDealId(null)} />
+          </ScreenTransition>
+        )}
+        {nav === "deals" && !viewingDeal && (
+          <ScreenTransition key="deals">
+            <Dashboard deals={deals} turns={turns} onNewDeal={() => handleNavChange("chat")} onOpenDeal={handleOpenDeal} />
+          </ScreenTransition>
+        )}
+        {nav === "mandate" && (
+          <ScreenTransition key="mandate">
+            <MandateView />
           </ScreenTransition>
         )}
       </AnimatePresence>

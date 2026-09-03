@@ -3,18 +3,24 @@
 // Live status feed — the demo centerpiece. Renders each step as a plain
 // ledger line (✓ done / ○ pending), deliberately NOT as decorative
 // glass/shadow cards — the point is that this reads like a real record
-// being written, not a widget. The escrow-lock and verification steps
-// are the two exceptions: they break the list rhythm with the Seal
-// signature component, because those are the one moment the whole brief
-// is about.
+// being written, not a widget. escrow-locked and verification used to
+// break this rhythm with a separate wax-seal stamp component; that's been
+// dropped in favor of the same plain line every other step uses, so the
+// whole feed reads as one consistent record rather than one moment
+// visually competing with the rest of the app's monochrome language. A
+// "Simulated" badge stays on verification when the attestation is mocked
+// — that's a real honesty signal (never present simulated verification as
+// indistinguishable from real), not decoration.
 //
-// This component is a pure renderer — it takes `steps` as a prop and
-// animates state transitions, but does NOT itself decide when a step
-// completes. See orchestrator.ts for the real driver (discovery, Gemini,
-// the on-chain PTBs, Walrus/Seal, Nautilus-mock).
+// StepList is the pure renderer — it takes `steps` as a prop and animates
+// state transitions, but does NOT itself decide when a step completes.
+// See orchestrator.ts for the real driver (discovery, Gemini, the
+// on-chain PTBs, Walrus/Seal, Nautilus-mock). It's used in three places:
+// StatusFeed below (the standalone ProgressView screen), ChatPanel's
+// collapsible DealProgress indicator, and nowhere else — Dashboard's
+// InProgressCard only needs a one-line summary, not the full list.
 
 import { AnimatePresence, motion } from "motion/react";
-import { Seal } from "./components/Seal";
 import type { CandidateInfo, StatusStep, VerificationInfo } from "./types";
 
 function isCandidateInfo(detail: StatusStep["detail"]): detail is CandidateInfo {
@@ -28,13 +34,18 @@ function isVerificationInfo(detail: StatusStep["detail"]): detail is Verificatio
 function StepGlyph({ state }: { state: StatusStep["state"] }) {
   if (state === "done") return <span className="text-emerald-500">✓</span>;
   if (state === "failed") return <span className="text-red-500">✕</span>;
-  if (state === "active") return <span className="animate-pulse text-accent">◐</span>;
+  if (state === "active") return <span className="animate-pulse text-vellum">◐</span>;
   return <span className="text-manifest">○</span>;
 }
 
 function DetailLine({ detail }: { detail: StatusStep["detail"] }) {
   if (!detail || typeof detail !== "string") return null;
-  return <p className="mt-1 pl-6 text-sm text-manifest">{detail}</p>;
+  // overflow-wrap: anywhere (not just break-words): Move abort messages
+  // contain long unbroken `::`-joined type paths that otherwise force
+  // this line (and its flex ancestors) wider than the viewport instead of
+  // wrapping — break-words alone doesn't affect intrinsic-width sizing
+  // the way `anywhere` does.
+  return <p className="mt-1 min-w-0 pl-6 text-sm text-manifest [overflow-wrap:anywhere]">{detail}</p>;
 }
 
 function CandidateLine({ detail }: { detail: CandidateInfo }) {
@@ -45,93 +56,71 @@ function CandidateLine({ detail }: { detail: CandidateInfo }) {
   );
 }
 
-/** Steps that get the full Seal treatment instead of a plain ledger line. */
-const SEALED_STEPS = new Set(["escrow-locked", "verification"]);
-
-function sealKindFor(stepId: string, detail: StatusStep["detail"]): "locked" | "verified" | "simulated" {
-  if (stepId === "escrow-locked") return "locked";
-  if (isVerificationInfo(detail) && detail.mocked) return "simulated";
-  return "verified";
+export function StepList({ steps }: { steps: StatusStep[] }) {
+  return (
+    <AnimatePresence initial={false}>
+      <div className="flex min-w-0 flex-col gap-3">
+        {steps.map((step) => (
+          <motion.div
+            key={step.id}
+            layout
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="min-w-0"
+          >
+            <div className="min-w-0">
+              <div className="flex items-center gap-3 text-sm">
+                <StepGlyph state={step.state} />
+                <span className={step.state === "pending" ? "text-manifest" : "text-vellum"}>{step.label}</span>
+                {isVerificationInfo(step.detail) && step.detail.mocked && (
+                  <span className="rounded-full border border-border px-2 py-0.5 text-xs text-manifest">
+                    Simulated
+                  </span>
+                )}
+              </div>
+              {isCandidateInfo(step.detail) && <CandidateLine detail={step.detail} />}
+              <DetailLine detail={step.detail} />
+              {isVerificationInfo(step.detail) && (
+                <p className="mt-1 break-words pl-6 font-data text-xs text-manifest">{step.detail.attestationId}</p>
+              )}
+            </div>
+          </motion.div>
+        ))}
+      </div>
+    </AnimatePresence>
+  );
 }
 
+/** Full-screen wrapper around StepList — used by ProgressView.tsx (the
+ * Deals tab's "view this deal's live progress" destination). */
 export function StatusFeed({
   steps,
   counterpartyName,
   onBack,
-  embedded = false,
 }: {
   steps: StatusStep[];
   counterpartyName?: string;
   onBack: () => void;
-  /** True when rendered inline inside a chat turn (ChatPanel.tsx) instead
-   * of as its own full screen — skips the page-level heading and the
-   * "Back to dashboard" action, since chat has no dead-end to escape. */
-  embedded?: boolean;
 }) {
   const failedStep = steps.find((s) => s.state === "failed");
 
   return (
     <div>
-      {!embedded && (
-        <h1 className="mb-1 text-2xl font-semibold tracking-tight text-vellum">
-          {failedStep ? "Something went wrong" : "Working on it"}
-        </h1>
-      )}
-      {counterpartyName && (
-        <p className="mb-6 text-sm text-manifest">Deal with {counterpartyName}</p>
-      )}
+      <h1 className="mb-1 text-2xl font-semibold tracking-tight text-vellum">
+        {failedStep ? "Something went wrong" : "Working on it"}
+      </h1>
+      {counterpartyName && <p className="mb-6 text-sm text-manifest">Deal with {counterpartyName}</p>}
 
-      <AnimatePresence initial={false}>
-        <div className="flex flex-col gap-3">
-          {steps.map((step) => {
-            const showSeal = SEALED_STEPS.has(step.id) && step.state === "done";
+      <StepList steps={steps} />
 
-            return (
-              <motion.div
-                key={step.id}
-                layout
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-              >
-                {showSeal ? (
-                  <div className="flex items-center gap-4 rounded-lg border border-border bg-surface px-4 py-4">
-                    <Seal kind={sealKindFor(step.id, step.detail)} size={64} />
-                    <div>
-                      <p className="font-medium text-vellum">{step.label}</p>
-                      <DetailLine detail={step.detail} />
-                      {isVerificationInfo(step.detail) && (
-                        <p className="mt-1 font-data text-sm text-manifest">
-                          {step.detail.attestationId}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="flex items-center gap-3 text-sm">
-                      <StepGlyph state={step.state} />
-                      <span className={step.state === "pending" ? "text-manifest" : "text-vellum"}>
-                        {step.label}
-                      </span>
-                    </div>
-                    {isCandidateInfo(step.detail) && <CandidateLine detail={step.detail} />}
-                    <DetailLine detail={step.detail} />
-                  </div>
-                )}
-              </motion.div>
-            );
-          })}
-        </div>
-      </AnimatePresence>
-
-      {failedStep && !embedded && (
+      {failedStep && (
         <button
           type="button"
           onClick={onBack}
           className="mt-8 rounded-md border border-border px-4 py-2 text-sm font-medium text-vellum transition-colors hover:border-white/30"
         >
-          Back to dashboard
+          Back to deals
         </button>
       )}
     </div>

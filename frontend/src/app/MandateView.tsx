@@ -41,17 +41,27 @@ export function MandateView() {
   }, [account]);
 
   if (status === "loading") {
-    return <p className="text-sm text-manifest">Loading your Mandate…</p>;
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+        <p className="text-sm text-manifest">Loading your Mandate…</p>
+      </div>
+    );
   }
 
   if (status === "error") {
-    return <p className="text-sm text-wax">Couldn't load your Mandate right now. Try again shortly.</p>;
+    return (
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+        <p className="text-sm text-wax">Couldn't load your Mandate right now. Try again shortly.</p>
+      </div>
+    );
   }
 
   if (status === "none" || !mandate) {
     return (
-      <div className="rounded-lg border border-dashed border-border py-16 text-center">
-        <p className="text-manifest">No Mandate found for this account.</p>
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+        <div className="rounded-lg border border-dashed border-border py-16 text-center">
+          <p className="text-manifest">No Mandate found for this account.</p>
+        </div>
       </div>
     );
   }
@@ -62,7 +72,7 @@ export function MandateView() {
   const isExpired = mandate.expiresAtMs < Date.now();
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 sm:px-6 sm:py-10">
       <div className="rounded-lg border border-border p-6">
         <div className="flex items-start justify-between gap-4">
           <div>

@@ -73,3 +73,21 @@ export interface DealSummary {
    * card below the counterparty name. */
   description: string;
 }
+
+/** A single turn in the Chat tab's ongoing conversation. Lives in App.tsx
+ * (not ChatPanel's own local state) so the Deals tab can show a running
+ * deal's live progress and let the user jump back to its exact turn in
+ * Chat — the two tabs are two views over the same state, not separate
+ * copies of it. */
+export interface AttachmentInfo {
+  name: string;
+  mimeType: string;
+  /** Only set for images — an object URL for inline preview/thumbnail.
+   * Revoked on unmount by the component that created it. */
+  previewUrl?: string;
+}
+
+export type ConversationTurn =
+  | { kind: "text"; role: "user" | "assistant"; text: string; attachment?: AttachmentInfo }
+  | { kind: "deal"; id: string; task: string; steps: StatusStep[]; receipt: DealReceipt | null }
+  | { kind: "error"; text: string };
