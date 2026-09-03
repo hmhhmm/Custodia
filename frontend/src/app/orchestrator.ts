@@ -50,7 +50,7 @@ import { buildCreateDealAllowlistTx, extractAllowlistIdFromEffects } from "../su
 import { buildAcceptDealTx } from "../sui/ptb-accept";
 import { buildMarkDeliveredTx } from "../sui/ptb-deliver";
 import { buildVerifyAndReleaseTx } from "../sui/ptb-release";
-import { findOwnedAgentIdentity } from "../sui/onboarding-status";
+import { findOwnedAgentIdentity, findMandateDetails } from "../sui/onboarding-status";
 import type { OnboardingResult } from "./Onboarding";
 import type { DealReceipt, StatusStep } from "./types";
 
@@ -99,9 +99,29 @@ export async function runOrchestratedDeal(
   }
 
   // --- Step 1: real on-chain discovery ---------------------------------
+  // The LLM's budget guess must respect the connected wallet's ACTUAL
+  // on-chain Mandate limits, or mandate::assert_within_mandate aborts on
+  // almost any real task (Gemini has no way to know the limits otherwise,
+  // and guesses a real-world-realistic fee — see llm.ts's interpretGoal).
+  // Two independent limits, per mandate.move's own doc comment
+  // ("spendable() = min(remaining, funds)"): the authorization cap
+  // (max_spend - spent_so_far) AND the actual custodied balance (funds) —
+  // a Mandate can be authorized for more than it's actually funded with,
+  // so checking only the cap isn't enough (that's exactly what produced
+  // EInsufficientMandateFunds here: max_spend allowed 0.2 SUI but funds
+  // only held 0.1 SUI). A 10% safety margin below the tighter of the two
+  // accounts for spent_so_far not being zero on a reused Mandate.
+  const mandate = await findMandateDetails(connectedAddress!, ENVOY_ADDRESS);
+  if (!mandate) {
+    fail(0, "No Mandate found for this account — complete onboarding first.");
+  }
+  const remainingAuthorizedMist = mandate.maxSpendMist - mandate.spentSoFarMist;
+  const spendableMist = remainingAuthorizedMist < mandate.fundsMist ? remainingAuthorizedMist : mandate.fundsMist;
+  const budgetCeilingSui = Math.max(0.01, (Number(spendableMist) / 1_000_000_000) * 0.9);
+
   let interpreted;
   try {
-    interpreted = await interpretGoal(goal);
+    interpreted = await interpretGoal(goal, budgetCeilingSui);
   } catch (err) {
     fail(0, `Goal interpretation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -161,6 +181,7 @@ export async function runOrchestratedDeal(
   emit();
 
   let dealId: string;
+  let stageDeadlineMs: bigint;
   try {
     const tx = buildLockEscrowAndCreateDealTx({
       mandateId,
@@ -179,7 +200,8 @@ export async function runOrchestratedDeal(
     if (!extracted) {
       throw new Error("create_and_share succeeded but no DealCreated event was found in the result.");
     }
-    dealId = extracted;
+    dealId = extracted.dealId;
+    stageDeadlineMs = extracted.stageDeadlineMs;
   } catch (err) {
     fail(4, `Escrow lock failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -252,10 +274,26 @@ export async function runOrchestratedDeal(
     const acceptTx = buildAcceptDealTx({
       dealId,
       specialistAgentIdentityId: candidate.agentId,
-      deliveryDeadlineMs: BigInt(Date.now() + 24 * 60 * 60 * 1000),
+      // The REAL on-chain deadline from DealCreated, not a fresh
+      // Date.now()-based guess — deal::accept requires an exact match
+      // (ETermsMismatch aborts otherwise) against deal.stage_deadline_ms,
+      // which was computed with the on-chain Clock at creation time.
+      deliveryDeadlineMs: stageDeadlineMs,
       amount: BigInt(Math.round(interpreted.maxBudget * 1_000_000_000)),
     });
-    await specialistKeypair.signAndExecuteTransaction({ transaction: acceptTx, client: dAppKit.getClient() });
+    const acceptResult = await specialistKeypair.signAndExecuteTransaction({
+      transaction: acceptTx,
+      client: dAppKit.getClient(),
+    });
+    // signAndExecuteTransaction never throws on a Move abort — it returns
+    // a FailedTransaction result instead (same discriminated union as
+    // releaseResult below). This was silently ignored before: a failed
+    // accept() left the deal at Escrowed, and mark_delivered then aborted
+    // with an unrelated-looking EInvalidTransition (Escrowed -> Delivered
+    // isn't a legal edge), masking the real accept() failure entirely.
+    if (acceptResult.FailedTransaction) {
+      throw new Error(acceptResult.FailedTransaction.status.error?.message ?? "accept() failed");
+    }
 
     const deliverTx = buildMarkDeliveredTx({
       dealId,
@@ -263,7 +301,13 @@ export async function runOrchestratedDeal(
       storageId: blobId,
       attestationId: attestation.attestationId,
     });
-    await specialistKeypair.signAndExecuteTransaction({ transaction: deliverTx, client: dAppKit.getClient() });
+    const deliverResult = await specialistKeypair.signAndExecuteTransaction({
+      transaction: deliverTx,
+      client: dAppKit.getClient(),
+    });
+    if (deliverResult.FailedTransaction) {
+      throw new Error(deliverResult.FailedTransaction.status.error?.message ?? "mark_delivered() failed");
+    }
 
     const releaseTx = buildVerifyAndReleaseTx({
       dealId,

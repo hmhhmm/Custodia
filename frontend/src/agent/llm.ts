@@ -4,18 +4,19 @@
 // CATEGORY LIST IS NOT ARBITRARY: it must exact-match, case-sensitively,
 // whatever a real on-chain Mandate's `allowed_categories` contains —
 // `mandate::assert_within_mandate` aborts with ECategoryNotAllowed on any
-// mismatch. The categories below must match Onboarding.tsx's
-// `allowedCategories` when it creates a Mandate — if one changes, the
-// other must change with it, or every real PTB #1 call aborts.
+// mismatch. MANDATE_CATEGORIES is re-exported from Onboarding.tsx's own
+// constant (not duplicated) so the two can never drift the way they once
+// did (this list used to hardcode only 2 of the Mandate's 6 real allowed
+// categories).
+
+import { MANDATE_CATEGORIES } from "../app/Onboarding";
 
 const GEMINI_API_KEY: string | undefined = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_MODEL = "gemini-3.7-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
-const ALLOWED_CATEGORIES = ["legal-review", "courier"] as const;
-
 export interface InterpretedGoal {
-  category: (typeof ALLOWED_CATEGORIES)[number];
+  category: (typeof MANDATE_CATEGORIES)[number];
   maxBudget: number;
   description: string;
 }
@@ -24,8 +25,16 @@ export interface InterpretedGoal {
  * Parses a plain-language goal into a structured task. Calls the real
  * Gemini API — requires VITE_GEMINI_API_KEY to be set (see frontend/.env,
  * gitignored; add your own key there, it is never committed).
+ *
+ * `maxBudgetSui` is a hard ceiling, not a hint the model can ignore: told
+ * to Gemini in the prompt for a better first guess, then clamped in code
+ * regardless of what it returns. Without this, Gemini guesses a
+ * real-world-realistic fee (e.g. 5-50 SUI for a legal review) with no
+ * awareness of the connected wallet's actual on-chain Mandate cap, and
+ * `mandate::assert_within_mandate` aborts with ESpendLimitExceeded on
+ * almost every real task.
  */
-export async function interpretGoal(goal: string): Promise<InterpretedGoal> {
+export async function interpretGoal(goal: string, maxBudgetSui: number): Promise<InterpretedGoal> {
   if (!GEMINI_API_KEY) {
     throw new Error(
       "interpretGoal: VITE_GEMINI_API_KEY is not set — add it to frontend/.env (see frontend/.env for the placeholder).",
@@ -33,8 +42,8 @@ export async function interpretGoal(goal: string): Promise<InterpretedGoal> {
   }
 
   const prompt = `You are a task classifier for an on-chain escrow system. Given a user's plain-language goal, respond with ONLY a JSON object (no markdown fences, no prose) with exactly these fields:
-- "category": must be exactly one of ${JSON.stringify(ALLOWED_CATEGORIES)} — pick whichever fits best, even if imperfect
-- "maxBudget": your best-guess reasonable budget in SUI as a plain number, based on the complexity implied by the goal
+- "category": must be exactly one of ${JSON.stringify(MANDATE_CATEGORIES)} — pick whichever fits best, even if imperfect
+- "maxBudget": your best-guess reasonable budget in SUI as a plain number. This is a testnet demo with a hard cap of ${maxBudgetSui} SUI total — never return a number above ${maxBudgetSui}, even if a real-world price for this task would normally be higher.
 - "description": a one-sentence restatement of what the user needs, in plain language
 
 User's goal: "${goal}"`;
@@ -72,7 +81,7 @@ User's goal: "${goal}"`;
   const obj = parsed as Record<string, unknown>;
   if (
     typeof obj.category !== "string" ||
-    !ALLOWED_CATEGORIES.includes(obj.category as (typeof ALLOWED_CATEGORIES)[number]) ||
+    !MANDATE_CATEGORIES.includes(obj.category as (typeof MANDATE_CATEGORIES)[number]) ||
     typeof obj.maxBudget !== "number" ||
     typeof obj.description !== "string"
   ) {
@@ -80,8 +89,12 @@ User's goal: "${goal}"`;
   }
 
   return {
-    category: obj.category as (typeof ALLOWED_CATEGORIES)[number],
-    maxBudget: obj.maxBudget,
+    category: obj.category as (typeof MANDATE_CATEGORIES)[number],
+    // Hard clamp — the prompt asks Gemini to respect the cap, but nothing
+    // stops it from ignoring that instruction, so this is the real
+    // enforcement point. A tiny floor keeps a 0-or-negative guess from
+    // producing a zero-amount PTB (deal.move's EZeroAmount).
+    maxBudget: Math.min(Math.max(obj.maxBudget, 0.01), maxBudgetSui),
     description: obj.description,
   };
 }

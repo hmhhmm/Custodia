@@ -34,7 +34,7 @@ export interface OnboardingResult {
 
 const DEFAULT_MAX_SPEND_SUI = 0.2;
 const DEFAULT_FUNDING_SUI = 0.1;
-const MANDATE_CATEGORIES = ["legal-review", "courier", "translation", "logistics", "design", "research"];
+export const MANDATE_CATEGORIES = ["legal-review", "courier", "translation", "logistics", "design", "research"] as const;
 const MANDATE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function suiToMist(sui: number): bigint {
@@ -104,7 +104,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
         const tx = buildCreateFundedMandateTx({
           delegate: ENVOY_ADDRESS,
           maxSpend: suiToMist(maxSpend),
-          allowedCategories: MANDATE_CATEGORIES,
+          allowedCategories: [...MANDATE_CATEGORIES],
           expiresAtMs: BigInt(Date.now() + MANDATE_DURATION_MS),
           fundingAmount: suiToMist(DEFAULT_FUNDING_SUI),
         });
@@ -130,7 +130,8 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
   const busy = mandateStatus === "active";
 
   return (
-    <div className="mx-auto max-w-xl">
+    <div className="min-h-screen bg-ink px-4 py-8 text-vellum sm:px-6 sm:py-10">
+      <div className="mx-auto max-w-xl">
       <h1 className="text-2xl font-semibold tracking-tight text-vellum">One-time setup</h1>
       <p className="mt-2 text-sm text-manifest">
         One real testnet transaction: authorize Envoy to spend on your behalf within a limit you set.
@@ -173,6 +174,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
       >
         {mandateId ? "Continue" : busy ? "Setting up…" : "Set up Custodia"}
       </button>
+      </div>
     </div>
   );
 }

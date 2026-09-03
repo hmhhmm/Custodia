@@ -38,16 +38,32 @@ export function buildLockEscrowAndCreateDealTx(params: {
   return tx;
 }
 
+export interface CreatedDeal {
+  dealId: string;
+  /** The ACTUAL on-chain deadline — deal.move computes this as
+   * clock.timestamp_ms() + delivery_window_ms using the on-chain Clock,
+   * not the client's local time. deal::accept() requires the caller to
+   * pass this exact value back (ETermsMismatch aborts otherwise), so it
+   * must be read from this event, never recomputed client-side from
+   * Date.now() (which drifts from the chain's clock by however long the
+   * PTB took to land, on top of ordinary clock skew). */
+  stageDeadlineMs: bigint;
+}
+
 /**
- * Reads deal_id off DealCreated. Events aren't present on the
- * signAndExecuteTransaction result itself — this waits for the fullnode to
- * index the transaction first (see events.ts).
+ * Reads deal_id and stage_deadline_ms off DealCreated. Events aren't
+ * present on the signAndExecuteTransaction result itself — this waits for
+ * the fullnode to index the transaction first (see events.ts).
  */
 export async function extractDealIdFromResult(
   client: DAppKitCompatibleClient,
   result: SuiClientTypes.TransactionResult,
-): Promise<string | null> {
+): Promise<CreatedDeal | null> {
   const withEvents = await fetchTransactionEvents(client, result);
-  const parsed = findEvent<{ deal_id?: string }>(withEvents, "::deal::DealCreated");
-  return parsed?.deal_id ?? null;
+  const parsed = findEvent<{ deal_id?: string; stage_deadline_ms?: string | number }>(
+    withEvents,
+    "::deal::DealCreated",
+  );
+  if (!parsed?.deal_id || parsed.stage_deadline_ms === undefined) return null;
+  return { dealId: parsed.deal_id, stageDeadlineMs: BigInt(parsed.stage_deadline_ms) };
 }
