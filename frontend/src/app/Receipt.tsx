@@ -7,7 +7,6 @@ import { CurrentAccountSigner, type DAppKit } from "@mysten/dapp-kit-core";
 import { dAppKit } from "../sui/dapp-kit";
 import { readBlob } from "../verification/walrus";
 import { decryptDealContent } from "../verification/seal";
-import { Seal } from "./components/Seal";
 import type { DealReceipt } from "./types";
 
 export function Receipt({
@@ -51,11 +50,20 @@ export function Receipt({
 
   return (
     <div className="flex flex-col items-center py-8 text-center">
-      <Seal kind={receipt.verification.mocked ? "simulated" : "verified"} size={112} />
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-hover text-emerald-500">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      </div>
 
-      <p className="mt-6 text-xl font-semibold tracking-tight text-vellum">
-        Paid {receipt.counterpartyName} · {receipt.amount} SUI
-      </p>
+      <div className="mt-4 flex items-center gap-2">
+        <p className="text-xl font-semibold tracking-tight text-vellum">
+          Paid {receipt.counterpartyName} · {receipt.amount} SUI
+        </p>
+        {receipt.verification.mocked && (
+          <span className="rounded-full border border-border px-2 py-0.5 text-xs text-manifest">Simulated</span>
+        )}
+      </div>
       <p className="mt-1 text-sm text-manifest">
         {receipt.verification.mocked
           ? "Verified by a simulated attestation — see README for the real Nautilus integration path."

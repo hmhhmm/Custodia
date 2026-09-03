@@ -8,13 +8,11 @@
 /*
  * Design tokens for the Custodia UI — modern dark SaaS register
  * (Vercel/Linear/Raycast-style): true neutral grayscale (no warm
- * undertone), crisp white text, a single accent color used sparingly,
- * Geist Sans/Mono typography.
- *
- * The wax-seal signature moment (escrow-lock / verified-release, see
- * components/Seal.tsx) keeps its own warm accent colors intentionally —
- * that one moment is still allowed to be the outlier the whole product
- * is about; everything else in the UI stays neutral and quiet around it.
+ * undertone), crisp white text, a single violet accent color used
+ * sparingly, Geist Sans/Mono typography. Applies everywhere, no
+ * exceptions — the wax-seal moment (components/Seal.tsx) that used to be
+ * a deliberately warm-colored outlier was removed in favor of this same
+ * language throughout.
  */
 @theme {
   --color-ink: #000000; /* primary background — true black */
@@ -23,12 +21,8 @@
   --color-vellum: #fafafa; /* primary text — crisp near-white */
   --color-manifest: #a1a1a1; /* secondary text, muted labels — neutral gray */
   --color-border: #2e2e2e; /* neutral card/hairline border */
-  --color-accent: #0070f3; /* the one accent color — Vercel blue, used sparingly */
-
-  /* Seal-only colors — NOT used elsewhere in the UI. */
-  --color-wax: #8c2f1e;
-  --color-verdigris: #5b7a6e;
-  --color-brass: #b08d4f;
+  --color-accent: #8b5cf6; /* the one accent color — violet, used sparingly */
+  --color-wax: #8c2f1e; /* error/failure state — bg-wax/10, text-wax etc. */
 
   --font-display: "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-body: "Geist", ui-sans-serif, system-ui, sans-serif;
