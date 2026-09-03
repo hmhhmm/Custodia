@@ -5,8 +5,15 @@
 // allowed_categories), it calls start_deal instead of replying in text.
 //
 // Function-calling shape (tools/functionDeclarations/functionCall/
-// functionResponse) verified against https://ai.google.dev/api/generate-content
-// this session — see the tools array below.
+// functionResponse) and inline file attachments (inlineData/mimeType/data)
+// verified against https://ai.google.dev/api/generate-content this
+// session — see the tools array and toGeminiContents below. Field casing
+// is camelCase throughout (systemInstruction, functionDeclarations,
+// inlineData) — official docs describe the REST surface as snake_case,
+// but this codebase's own working calls (system prompt + function-calling
+// both demonstrably correct in testing) prove Gemini's endpoint accepts
+// camelCase too, so inlineData follows the same convention rather than
+// mixing the two within one request body.
 //
 // CATEGORY LIST IS NOT ARBITRARY — same constraint as llm.ts's
 // interpretGoal: must match Onboarding.tsx's Mandate allowedCategories.
@@ -45,9 +52,19 @@ const TOOLS = [
 
 export type ChatRole = "user" | "assistant";
 
+export interface ChatAttachment {
+  /** e.g. "image/png", "application/pdf" — passed straight through as
+   * inlineData.mimeType. */
+  mimeType: string;
+  /** Base64-encoded file content, no data: URL prefix. */
+  data: string;
+  name: string;
+}
+
 export interface ChatMessage {
   role: ChatRole;
   text: string;
+  attachment?: ChatAttachment;
 }
 
 export type ChatTurnResult =
@@ -57,13 +74,17 @@ export type ChatTurnResult =
 interface GeminiPart {
   text?: string;
   functionCall?: { name: string; args: Record<string, unknown> };
+  inlineData?: { mimeType: string; data: string };
 }
 
 function toGeminiContents(history: ChatMessage[]): { role: "user" | "model"; parts: GeminiPart[] }[] {
-  return history.map((m) => ({
-    role: m.role === "user" ? "user" : "model",
-    parts: [{ text: m.text }],
-  }));
+  return history.map((m) => {
+    const parts: GeminiPart[] = [{ text: m.text }];
+    if (m.attachment) {
+      parts.push({ inlineData: { mimeType: m.attachment.mimeType, data: m.attachment.data } });
+    }
+    return { role: m.role === "user" ? "user" : "model", parts };
+  });
 }
 
 /**
