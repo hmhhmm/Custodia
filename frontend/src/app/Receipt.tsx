@@ -89,7 +89,7 @@ export function Receipt({
 
   return (
     <div className="flex flex-col items-center py-8 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-hover text-emerald-500">
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-hover text-vellum">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M20 6 9 17l-5-5" />
         </svg>

@@ -8,11 +8,17 @@
 /*
  * Design tokens for the Custodia UI — modern dark SaaS register
  * (Vercel/Linear/Raycast-style): true neutral grayscale (no warm
- * undertone), crisp white text, a single violet accent color used
- * sparingly, Geist Sans/Mono typography. Applies everywhere, no
- * exceptions — the wax-seal moment (components/Seal.tsx) that used to be
- * a deliberately warm-colored outlier was removed in favor of this same
- * language throughout.
+ * undertone), crisp white text, Geist Sans/Mono typography. Applies
+ * everywhere, no exceptions — the wax-seal moment (components/Seal.tsx)
+ * that used to be a deliberately warm-colored outlier was removed in
+ * favor of this same language throughout.
+ *
+ * No violet/purple anywhere, app-wide (explicit request) — --color-accent
+ * used to be #8b5cf6 (violet); every text-accent/border-accent/bg-accent
+ * usage across the app now resolves to this same near-white as --color-vellum
+ * instead, since this is a single Tailwind v4 @theme token every one of
+ * those utility classes reads from — changing it here is sufficient,
+ * nothing else needs touching.
  */
 @theme {
   --color-ink: #000000; /* primary background — true black */
@@ -21,7 +27,7 @@
   --color-vellum: #fafafa; /* primary text — crisp near-white */
   --color-manifest: #a1a1a1; /* secondary text, muted labels — neutral gray */
   --color-border: #2e2e2e; /* neutral card/hairline border */
-  --color-accent: #8b5cf6; /* the one accent color — violet, used sparingly */
+  --color-accent: #fafafa; /* was violet (#8b5cf6) — now the same near-white as vellum, per explicit "no purple anywhere" request */
   --color-wax: #8c2f1e; /* error/failure state — bg-wax/10, text-wax etc. */
 
   --font-display: "Geist", ui-sans-serif, system-ui, sans-serif;

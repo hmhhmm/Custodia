@@ -41,10 +41,10 @@ const STATUS_STYLE: Record<DealStatusName, { text: string; label: string }> = {
   Accepted: { text: "text-manifest", label: "Accepted" },
   Delivered: { text: "text-slate-400", label: "Delivered" },
   Verified: { text: "text-manifest", label: "Verified" },
-  Released: { text: "text-emerald-400", label: "Released" },
+  Released: { text: "text-vellum", label: "Released" },
   Disputed: { text: "text-red-400", label: "Disputed" },
   Refunded: { text: "text-manifest", label: "Refunded" },
-  Settled: { text: "text-emerald-400", label: "Settled" },
+  Settled: { text: "text-vellum", label: "Settled" },
 };
 
 /** Category icon set — a small, deliberately simple line-icon per
