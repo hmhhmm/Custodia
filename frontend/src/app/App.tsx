@@ -196,6 +196,21 @@ export function App() {
   // live step feed only, no on-chain status panel until escrow exists.
   const viewingPreEscrowTurn = viewingDeal && !viewingDeal.pending ? viewingDeal : null;
 
+  /** Finds the real thread id for the deal currently open in ProgressView
+   * by its on-chain dealId — NOT via `viewingDeal`, which is only ever
+   * set for a deal reached through a live in-session Chat turn. A deal
+   * opened from a chain-derived Dashboard card has viewingDeal ===
+   * undefined even though its own chat thread genuinely exists in
+   * `turns` (it was created earlier in this same browser's history) —
+   * `viewingDeal?.id ?? GENERAL_THREAD_ID` was silently falling back to
+   * General every time, which is the exact bug behind "Return to chat
+   * lands on the empty front page instead of the specific thread". */
+  function resolveThreadIdForDeal(dealId: string | null): string {
+    if (!dealId) return GENERAL_THREAD_ID;
+    const dealTurn = turns.find((t) => t.kind === "deal" && t.pending?.dealId === dealId);
+    return dealTurn?.threadId ?? GENERAL_THREAD_ID;
+  }
+
   return (
     <AppShell activeNav={nav} onNavChange={handleNavChange} address={account.address}>
       <AnimatePresence mode="wait">
@@ -222,13 +237,24 @@ export function App() {
                 setViewingDealId(null);
                 setViewingChainDealId(null);
               }}
-              onReturnToChat={() => handleReturnToChat(viewingDeal?.id ?? GENERAL_THREAD_ID)}
+              onReturnToChat={() => handleReturnToChat(resolveThreadIdForDeal(viewingDealIdResolved))}
               onReleased={(finalReceipt) => {
-                if (viewingDeal) {
-                  setTurns((prev) =>
-                    prev.map((t) => (t.kind === "deal" && t.id === viewingDeal.id ? { ...t, receipt: finalReceipt } : t)),
-                  );
-                }
+                // Match by the on-chain dealId (pending.dealId), not just
+                // viewingDeal — a deal opened from a chain-derived Deals
+                // tab card (no live ConversationTurn ever existed for it
+                // in this session) has viewingDeal === undefined, so the
+                // old `if (viewingDeal)` guard silently skipped writing
+                // the release back into `turns` entirely. That's the
+                // exact bug that left the Chat thread frozen at "Waiting
+                // for specialist" forever after a real on-chain release:
+                // the two views of the same deal had genuinely diverged
+                // because only one of the two release paths updated
+                // chat's in-memory turn state.
+                setTurns((prev) =>
+                  prev.map((t) =>
+                    t.kind === "deal" && t.pending?.dealId === viewingDealIdResolved ? { ...t, receipt: finalReceipt } : t,
+                  ),
+                );
                 handleDealComplete(finalReceipt);
               }}
             />

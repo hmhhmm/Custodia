@@ -123,6 +123,14 @@ export interface DealMetadata {
    * checkpoint timestamp, the real creation time (see the query comment
    * above; the Deal object itself stores no such field). */
   createdAtMs: number | null;
+  /** The ORIGINAL escrowed amount, in MIST, from the DealCreated event —
+   * NOT the same as Deal.escrowed_amount, which is a live balance that
+   * correctly drops to 0 once verify_and_release withdraws it all (see
+   * deal.move's pay_specialist). Reading the live balance for a RELEASED
+   * deal's "amount paid" display was a real bug: it showed 0 SUI for a
+   * deal that had genuinely already paid out, because the escrow was
+   * empty by design after paying, not because nothing was ever paid. */
+  amountMist: bigint;
 }
 
 /** Maps dealId -> {category, createdAtMs}, by scanning every DealCreated
@@ -144,7 +152,7 @@ export async function findDealMetadata(): Promise<Map<string, DealMetadata>> {
     const json = node?.contents?.json as DealCreatedJson | undefined;
     if (json?.deal_id) {
       const createdAtMs = node?.timestamp ? new Date(node.timestamp).getTime() : null;
-      map.set(json.deal_id, { category: json.category, createdAtMs });
+      map.set(json.deal_id, { category: json.category, createdAtMs, amountMist: BigInt(json.amount) });
     }
   }
   return map;
@@ -252,6 +260,67 @@ export async function findDealById(dealId: string): Promise<SpecialistDeal | nul
     };
   }
   return null;
+}
+
+// Unlike DealCreated (always emitted by Envoy — see GetDealCreatedEventsQuery
+// above), DealAccepted/DealDelivered are signed by the specialist and
+// DealReleased by Envoy (verify_and_release, see release.ts) — no single
+// sender to filter by, so this scans by type only and matches deal_id
+// client-side, same pattern as findAllowlistForDeal/findProofForDeal below.
+const GetEventsByTypeQuery = graphql(`
+  query GetEventsByType($type: String!) {
+    events(filter: { type: $type }) {
+      nodes {
+        timestamp
+        contents {
+          json
+        }
+      }
+    }
+  }
+`);
+
+interface DealStageEventJson {
+  deal_id: string;
+}
+
+export interface DealStageTimestamps {
+  acceptedAtMs: number | null;
+  deliveredAtMs: number | null;
+  releasedAtMs: number | null;
+}
+
+/** Real per-stage timestamps for one deal's timeline — each pulled from the
+ * checkpoint time (Event.timestamp) of the DealAccepted/DealDelivered/
+ * DealReleased event that carries this exact deal_id. Deal itself stores no
+ * per-stage history (only a forward-looking, overwritten stage_deadline_ms —
+ * see deal.move's own doc comment on that field), so this is the only real
+ * (non-fabricated) source for "when did this stage actually happen." */
+export async function findDealStageTimestamps(dealId: string): Promise<DealStageTimestamps> {
+  const [accepted, delivered, released] = await Promise.all([
+    client.query({ query: GetEventsByTypeQuery, variables: { type: `${PACKAGE_ID}::deal::DealAccepted` } }),
+    client.query({ query: GetEventsByTypeQuery, variables: { type: `${PACKAGE_ID}::deal::DealDelivered` } }),
+    client.query({ query: GetEventsByTypeQuery, variables: { type: `${PACKAGE_ID}::deal::DealReleased` } }),
+  ]);
+  for (const result of [accepted, delivered, released]) {
+    if (result.errors?.length) {
+      throw new Error(`Deal stage events query failed: ${JSON.stringify(result.errors)}`);
+    }
+  }
+  function findTimestamp(nodes: readonly { timestamp?: string | null; contents?: { json?: unknown } | null }[] | undefined): number | null {
+    for (const node of nodes ?? []) {
+      const json = node?.contents?.json as DealStageEventJson | undefined;
+      if (json?.deal_id === dealId && node?.timestamp) {
+        return new Date(node.timestamp).getTime();
+      }
+    }
+    return null;
+  }
+  return {
+    acceptedAtMs: findTimestamp(accepted.data?.events?.nodes),
+    deliveredAtMs: findTimestamp(delivered.data?.events?.nodes),
+    releasedAtMs: findTimestamp(released.data?.events?.nodes),
+  };
 }
 
 interface DealAllowlistJson {

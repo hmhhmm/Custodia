@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { findOwnedAgentIdentities } from "../sui/onboarding-status";
-import { findDealsForSpecialist, findAllowlistForDeal, type SpecialistDeal } from "../sui/deal-queries";
+import { findDealsForSpecialist, findAllowlistForDeal, findDealMetadata, type SpecialistDeal, type DealMetadata } from "../sui/deal-queries";
 import { buildAcceptDealTx } from "../sui/ptb-accept";
 import { buildMarkDeliveredTx } from "../sui/ptb-deliver";
 import { encryptDealContent } from "../verification/seal";
@@ -45,6 +45,7 @@ export function SpecialistInbox() {
 
   const [agents, setAgents] = useState<RegisteredAgent[] | "loading">("loading");
   const [deals, setDeals] = useState<InboxDeal[]>([]);
+  const [metadataByDeal, setMetadataByDeal] = useState<Map<string, DealMetadata>>(new Map());
   const [dealsStatus, setDealsStatus] = useState<"loading" | "ready" | "error">("loading");
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -82,17 +83,21 @@ export function SpecialistInbox() {
     setDealsStatus("loading");
 
     function load() {
-      return Promise.all(
-        agents === "loading"
-          ? []
-          : agents.map((a) =>
-              findDealsForSpecialist(a.agentId).then((found) => found.map((deal) => ({ deal, specialistAgentId: a.agentId }))),
-            ),
-      )
-        .then((results) => {
+      return Promise.all([
+        Promise.all(
+          agents === "loading"
+            ? []
+            : agents.map((a) =>
+                findDealsForSpecialist(a.agentId).then((found) => found.map((deal) => ({ deal, specialistAgentId: a.agentId }))),
+              ),
+        ),
+        findDealMetadata(),
+      ])
+        .then(([results, meta]) => {
           if (cancelled) return;
           const flat = results.flat().sort((a, b) => b.deal.stageDeadlineMs - a.deal.stageDeadlineMs);
           setDeals(flat);
+          setMetadataByDeal(meta);
           setDealsStatus("ready");
         })
         .catch(() => {
@@ -135,7 +140,9 @@ export function SpecialistInbox() {
         </p>
       </div>
 
-      {dealsStatus === "ready" && deals.length > 0 && <EarningsSummary deals={deals.map((d) => d.deal)} />}
+      {dealsStatus === "ready" && deals.length > 0 && (
+        <EarningsSummary deals={deals.map((d) => d.deal)} metadataByDeal={metadataByDeal} />
+      )}
 
       {dealsStatus === "loading" && <p className="text-sm text-manifest">Loading deals…</p>}
       {dealsStatus === "error" && <p className="text-sm text-wax">Couldn't load deals right now. Try again shortly.</p>}
@@ -153,6 +160,7 @@ export function SpecialistInbox() {
               key={deal.dealId}
               deal={deal}
               specialistAgentId={specialistAgentId}
+              metadata={metadataByDeal.get(deal.dealId)}
               onChanged={() => setRefreshKey((k) => k + 1)}
             />
           ))}
@@ -162,18 +170,35 @@ export function SpecialistInbox() {
   );
 }
 
-/** Sums escrowed_amount across every deal this wallet has actually been
- * PAID for — Released or Settled only (the on-chain fact that
- * verify_and_release/claim_release/settle_default actually transferred
- * funds to this specialist's owner address). A Delivered-but-not-yet-
- * released deal is not yet earned; counting it here would overstate real
- * income before the money has actually moved. */
-function EarningsSummary({ deals }: { deals: SpecialistDeal[] }) {
+/** Sums the ORIGINAL escrowed amount (from each deal's DealCreated event,
+ * via metadataByDeal — see deal-queries.ts's DealMetadata.amountMist)
+ * across every deal this wallet has actually been PAID for — Released or
+ * Settled only (the on-chain fact that verify_and_release/claim_release/
+ * settle_default actually transferred funds to this specialist's owner
+ * address). A Delivered-but-not-yet-released deal is not yet earned;
+ * counting it here would overstate real income before the money has
+ * actually moved.
+ *
+ * MUST use the event's original amount, not deal.escrowedAmountMist —
+ * that field is a LIVE balance and deal.move's pay_specialist withdraws
+ * it to exactly 0 on release BY DESIGN (the escrow is empty because it
+ * was fully paid out, not because nothing was paid). Summing the live
+ * balance over released deals is mathematically guaranteed to total 0
+ * regardless of how much was actually earned — this was a real bug, not
+ * a display nicety, and it's what made "Total earned" always read 0. */
+function EarningsSummary({
+  deals,
+  metadataByDeal,
+}: {
+  deals: SpecialistDeal[];
+  metadataByDeal: Map<string, DealMetadata>;
+}) {
+  const amountFor = (d: SpecialistDeal) => metadataByDeal.get(d.dealId)?.amountMist ?? d.escrowedAmountMist;
   const paid = deals.filter((d) => d.status === "Released" || d.status === "Settled");
-  const totalMist = paid.reduce((sum, d) => sum + d.escrowedAmountMist, 0n);
+  const totalMist = paid.reduce((sum, d) => sum + amountFor(d), 0n);
   const pendingMist = deals
     .filter((d) => d.status !== "Released" && d.status !== "Settled" && d.status !== "Refunded" && d.status !== "Disputed")
-    .reduce((sum, d) => sum + d.escrowedAmountMist, 0n);
+    .reduce((sum, d) => sum + amountFor(d), 0n);
 
   return (
     <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -201,10 +226,12 @@ function EarningsSummary({ deals }: { deals: SpecialistDeal[] }) {
 function DealCard({
   deal,
   specialistAgentId,
+  metadata,
   onChanged,
 }: {
   deal: SpecialistDeal;
   specialistAgentId: string;
+  metadata: DealMetadata | undefined;
   onChanged: () => void;
 }) {
   const dAppKit = useDAppKit();
@@ -212,6 +239,10 @@ function DealCard({
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The ORIGINAL amount from DealCreated — see EarningsSummary's header
+  // comment for why deal.escrowedAmountMist alone is wrong once released
+  // (it's a live balance that correctly reads 0 after payout).
+  const displayAmountMist = metadata?.amountMist ?? deal.escrowedAmountMist;
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = e.target.files?.[0];
@@ -321,7 +352,7 @@ function DealCard({
       <div className="flex items-start justify-between gap-4 p-5">
         <div className="min-w-0">
           <p className="truncate font-data text-xs text-manifest">{deal.dealId}</p>
-          <p className="mt-1.5 text-2xl font-semibold tracking-tight text-vellum">{mistToSui(deal.escrowedAmountMist)}</p>
+          <p className="mt-1.5 text-2xl font-semibold tracking-tight text-vellum">{mistToSui(displayAmountMist)}</p>
         </div>
         <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs ${statusTone[deal.status] ?? "border-border text-manifest"}`}>
           {deal.status}
@@ -410,7 +441,7 @@ function DealCard({
             Paid
           </p>
           <p className="mt-1 text-sm text-manifest">
-            The client released {mistToSui(deal.escrowedAmountMist)} to your connected wallet.
+            The client released {mistToSui(displayAmountMist)} to your connected wallet.
           </p>
         </div>
       )}

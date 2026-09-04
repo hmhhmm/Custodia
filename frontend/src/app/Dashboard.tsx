@@ -177,7 +177,12 @@ function ChainDealCard({
 }) {
   const status = STATUS_STYLE[deal.status];
   const category = metadata?.category;
-  const title = useDealTitle(deal.dealId, category, mistToSui(deal.escrowedAmountMist));
+  // The ORIGINAL amount from DealCreated, not deal.escrowedAmountMist —
+  // that field is a LIVE balance and correctly reads 0 once
+  // verify_and_release has paid it out, which was showing as "0 SUI" on
+  // a card for a deal that had genuinely already been paid in full.
+  const amountMist = metadata?.amountMist ?? deal.escrowedAmountMist;
+  const title = useDealTitle(deal.dealId, category, mistToSui(amountMist));
 
   return (
     <button
@@ -205,7 +210,7 @@ function ChainDealCard({
 
       <div className="flex items-center justify-between border-t border-border pt-3 text-sm">
         <span className="font-data text-vellum">
-          {mistToSui(deal.escrowedAmountMist).toLocaleString(undefined, { maximumFractionDigits: 4 })} SUI
+          {mistToSui(amountMist).toLocaleString(undefined, { maximumFractionDigits: 4 })} SUI
         </span>
         <span className="text-manifest transition-transform group-hover:translate-x-0.5">→</span>
       </div>
