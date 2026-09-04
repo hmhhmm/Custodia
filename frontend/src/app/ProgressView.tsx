@@ -16,18 +16,25 @@
 // (see release.ts).
 
 import { useEffect, useState } from "react";
+import { CurrentAccountSigner, type DAppKit } from "@mysten/dapp-kit-core";
+import { dAppKit } from "../sui/dapp-kit";
 import type { ConversationTurn, DealReceipt, PendingRelease } from "./types";
 import { StatusFeed } from "./StatusFeed";
 import {
   findDealById,
   findDealMetadata,
   findDealStageTimestamps,
+  findCheckpointsForDeal,
+  findAllowlistForDeal,
   type DealStatusName,
   type DealMetadata,
   type DealStageTimestamps,
+  type DealCheckpointInfo,
 } from "../sui/deal-queries";
 import { releaseDeal, reconstructPendingRelease } from "./release";
 import { summarizeDealTitle } from "../agent/llm";
+import { readBlob } from "../verification/walrus";
+import { decryptDealContent } from "../verification/seal";
 import {
   getCachedDealTitle,
   setCachedDealTitle,
@@ -80,7 +87,7 @@ function StatusPill({ status }: { status: DealStatusName }) {
   return <span className={`text-xs font-medium ${style[status]}`}>{status}</span>;
 }
 
-function formatDateTime(ms: number | null | undefined): string {
+export function formatDateTime(ms: number | null | undefined): string {
   if (!ms) return "Unknown";
   return new Date(ms).toLocaleString(undefined, {
     year: "numeric",
@@ -206,56 +213,155 @@ function stageTimestamp(
   }
 }
 
-/** Status timeline — a real progression readout (not just the current
- * status alone), so the page communicates the deal's full history at a
- * glance the way a professional order-tracking page would. */
+/** Horizontal (mobile: vertical) stepper across the 4 coarse on-chain
+ * stages — Grab/Foodpanda-style order tracker, not a plain checklist —
+ * with the specialist's real granular checkpoints (see
+ * move/sources/checkpoint.move) rendered as a sub-trail beneath the
+ * currently active/most-recent stage. Every timestamp and checkpoint here
+ * is a real on-chain fact (Event.timestamp / DealCheckpoint fields), never
+ * fabricated. */
 function Timeline({
   status,
   createdAtMs,
   stageTimes,
+  checkpoints,
+  dealId,
+  allowlistId,
 }: {
   status: DealStatusName;
   createdAtMs: number | null | undefined;
   stageTimes: DealStageTimestamps | null;
+  checkpoints: DealCheckpointInfo[];
+  dealId: string;
+  allowlistId: string | null;
 }) {
   const currentRank = statusRank(status);
   const isDisputeLike = status === "Disputed" || status === "Refunded";
+  // Checkpoints belong under the "Accepted" stage — they're the
+  // specialist's real work-in-progress trail, pushed after accepting and
+  // before/at delivery (see checkpoint.move's header comment: additive
+  // alongside deal.move's own coarse status, never a replacement for it).
+  const acceptedStageIndex = TIMELINE_STAGES.findIndex((s) => s.status === "Accepted");
 
   return (
-    <div className="flex flex-col gap-0">
-      {TIMELINE_STAGES.map((stage, i) => {
-        const stageRank = statusRank(stage.status);
-        const done = !isDisputeLike && currentRank >= stageRank;
-        const active = !isDisputeLike && currentRank === stageRank - 1;
-        const isLast = i === TIMELINE_STAGES.length - 1;
-        const ts = done ? stageTimestamp(stage.status, createdAtMs, stageTimes) : null;
-        return (
-          <div key={stage.status} className="flex gap-3">
-            <div className="flex flex-col items-center">
-              <span
-                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs ${
-                  done
-                    ? "border-emerald-500 bg-emerald-500 text-ink"
-                    : active
-                      ? "border-accent text-accent"
-                      : "border-border text-manifest"
-                }`}
-              >
-                {done ? "✓" : ""}
-              </span>
-              {!isLast && <span className={`w-px flex-1 ${done ? "bg-emerald-500/40" : "bg-border"}`} style={{ minHeight: "1.5rem" }} />}
+    <div>
+      <div className="flex flex-col gap-0 sm:flex-row sm:items-start sm:gap-0">
+        {TIMELINE_STAGES.map((stage, i) => {
+          const stageRank = statusRank(stage.status);
+          const done = !isDisputeLike && currentRank >= stageRank;
+          const active = !isDisputeLike && currentRank === stageRank - 1;
+          const isLast = i === TIMELINE_STAGES.length - 1;
+          const ts = done ? stageTimestamp(stage.status, createdAtMs, stageTimes) : null;
+          return (
+            <div key={stage.status} className="flex flex-1 gap-3 sm:flex-col sm:gap-0">
+              <div className="flex flex-col items-center sm:w-full sm:flex-row">
+                <span
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs ${
+                    done
+                      ? "border-emerald-500 bg-emerald-500 text-ink"
+                      : active
+                        ? "border-accent text-accent"
+                        : "border-border text-manifest"
+                  }`}
+                >
+                  {done ? "✓" : ""}
+                </span>
+                {!isLast && (
+                  <span
+                    className={`w-px flex-1 sm:h-px sm:w-auto ${done ? "bg-emerald-500/40" : "bg-border"}`}
+                    style={{ minHeight: "1.5rem" }}
+                  />
+                )}
+              </div>
+              <div className="flex flex-1 items-baseline justify-between gap-3 pb-6 sm:mt-2 sm:flex-col sm:items-start sm:gap-0.5 sm:pb-0 sm:pr-3">
+                <p className={`text-sm ${done || active ? "text-vellum" : "text-manifest"}`}>{stage.label}</p>
+                {ts && <p className="shrink-0 text-xs text-manifest">{formatDateTime(ts)}</p>}
+              </div>
+              {i === acceptedStageIndex && checkpoints.length > 0 && (
+                <div className="mb-6 mt-1 flex flex-col gap-3 border-l border-border pl-4 sm:ml-2.5 sm:mb-0">
+                  {checkpoints.map((c) => (
+                    <CheckpointItem key={c.checkpointId} checkpoint={c} dealId={dealId} allowlistId={allowlistId} />
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="flex flex-1 items-baseline justify-between gap-3 pb-6">
-              <p className={`text-sm ${done || active ? "text-vellum" : "text-manifest"}`}>{stage.label}</p>
-              {ts && <p className="shrink-0 text-xs text-manifest">{formatDateTime(ts)}</p>}
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
       {isDisputeLike && (
         <p className="mt-1 text-sm text-wax">
           {status === "Disputed" ? "This deal was disputed before reaching release." : "This deal was refunded to the client's Mandate."}
         </p>
+      )}
+    </div>
+  );
+}
+
+/** One real specialist-pushed status update in the client-facing trail —
+ * label, note, timestamp, and a photo decrypted on demand with the
+ * CONNECTED wallet's own signature (the client, who is on this screen —
+ * unlike chainAdvance.ts's automatic Envoy-signed summarization, a photo
+ * click here is a genuine user action, so the same manual-decrypt pattern
+ * Receipt.tsx already uses applies unchanged). */
+function CheckpointItem({
+  checkpoint,
+  dealId,
+  allowlistId,
+}: {
+  checkpoint: DealCheckpointInfo;
+  dealId: string;
+  allowlistId: string | null;
+}) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoStatus, setPhotoStatus] = useState<"idle" | "loading" | "error">("idle");
+
+  function makeSigner() {
+    return new CurrentAccountSigner(dAppKit as unknown as DAppKit);
+  }
+
+  async function handleViewPhoto() {
+    if (!checkpoint.photo || !allowlistId) return;
+    setPhotoStatus("loading");
+    try {
+      const encrypted = await readBlob(checkpoint.photo.blobId);
+      const decrypted = await decryptDealContent(encrypted, dAppKit.getClient(), allowlistId, checkpoint.photo.seedId, makeSigner());
+      const blob = new Blob([new Uint8Array(decrypted)]);
+      setPhotoUrl(URL.createObjectURL(blob));
+      setPhotoStatus("idle");
+    } catch (err) {
+      console.error("checkpoint photo decrypt failed for", dealId, err);
+      setPhotoStatus("error");
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (photoUrl) URL.revokeObjectURL(photoUrl);
+    };
+  }, [photoUrl]);
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm text-vellum">{checkpoint.label}</p>
+        <p className="shrink-0 text-xs text-manifest">{formatDateTime(checkpoint.createdAtMs)}</p>
+      </div>
+      {checkpoint.note && <p className="mt-0.5 text-xs text-manifest">{checkpoint.note}</p>}
+      {checkpoint.photo && (
+        <div className="mt-1.5">
+          {photoUrl ? (
+            <img src={photoUrl} alt={checkpoint.label} className="max-h-40 rounded-md border border-border" />
+          ) : (
+            <button
+              type="button"
+              onClick={handleViewPhoto}
+              disabled={photoStatus === "loading" || !allowlistId}
+              className="text-xs text-manifest underline underline-offset-2 hover:text-vellum disabled:opacity-40"
+            >
+              {photoStatus === "loading" ? "Decrypting…" : photoStatus === "error" ? "Failed to load — retry" : "View photo"}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -282,6 +388,8 @@ export function ProgressView({
   const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
   const [metadata, setMetadata] = useState<DealMetadata | null>(null);
   const [stageTimes, setStageTimes] = useState<DealStageTimestamps | null>(null);
+  const [checkpoints, setCheckpoints] = useState<DealCheckpointInfo[]>([]);
+  const [allowlistId, setAllowlistId] = useState<string | null>(null);
   const [title, setTitle] = useState<string | null>(() => getCachedDealTitle(dealId));
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
@@ -362,6 +470,45 @@ export function ProgressView({
     return () => {
       cancelled = true;
       clearInterval(interval);
+    };
+  }, [dealId]);
+
+  // The specialist's real granular checkpoint trail (see
+  // move/sources/checkpoint.move) — polled alongside the coarse status so
+  // a newly-pushed checkpoint appears here live, not just after a manual
+  // refresh. Also fetch the deal's DealAllowlist once (its id doesn't
+  // change) — needed by CheckpointItem to decrypt any attached photo.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const found = await findCheckpointsForDeal(dealId);
+        if (!cancelled) setCheckpoints(found);
+      } catch {
+        // Transient GraphQL hiccup — next poll tick will retry.
+      }
+    }
+
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [dealId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    findAllowlistForDeal(dealId)
+      .then((found) => {
+        if (!cancelled) setAllowlistId(found);
+      })
+      .catch(() => {
+        if (!cancelled) setAllowlistId(null);
+      });
+    return () => {
+      cancelled = true;
     };
   }, [dealId]);
 
@@ -465,7 +612,14 @@ export function ProgressView({
       {displayStatus && (
         <div className="mt-6 rounded-xl border border-border bg-surface p-6">
           <p className="mb-5 text-sm font-medium text-vellum">Status timeline</p>
-          <Timeline status={displayStatus} createdAtMs={metadata?.createdAtMs} stageTimes={stageTimes} />
+          <Timeline
+            status={displayStatus}
+            createdAtMs={metadata?.createdAtMs}
+            stageTimes={stageTimes}
+            checkpoints={checkpoints}
+            dealId={dealId}
+            allowlistId={allowlistId}
+          />
 
           {!alreadyReleased && liveStatus === "Delivered" && (
             <div className="border-t border-border pt-5">

@@ -11,13 +11,48 @@
 import { useEffect, useState } from "react";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { findOwnedAgentIdentities } from "../sui/onboarding-status";
-import { findDealsForSpecialist, findAllowlistForDeal, findDealMetadata, type SpecialistDeal, type DealMetadata } from "../sui/deal-queries";
+import {
+  findDealsForSpecialist,
+  findAllowlistForDeal,
+  findDealMetadata,
+  findCheckpointsForDeal,
+  type SpecialistDeal,
+  type DealMetadata,
+  type DealCheckpointInfo,
+} from "../sui/deal-queries";
 import { buildAcceptDealTx } from "../sui/ptb-accept";
 import { buildMarkDeliveredTx } from "../sui/ptb-deliver";
-import { encryptDealContent } from "../verification/seal";
-import { storeBlob } from "../verification/walrus";
+import { buildPushCheckpointTx } from "../sui/ptb-checkpoint";
+import { encryptDealContent, decryptDealContent } from "../verification/seal";
+import { storeBlob, readBlob } from "../verification/walrus";
 import { mockNautilusAttest } from "../verification/nautilus.mock";
+import { dAppKit as dAppKitSingleton } from "../sui/dapp-kit";
+import { CurrentAccountSigner, type DAppKit } from "@mysten/dapp-kit-core";
 import type { RegisteredAgent } from "../sui/ptb-register-agent";
+import { formatDateTime } from "./ProgressView";
+
+// Suggested checkpoint labels per category — a Grab/Foodpanda-style
+// granular status trail, richer than deal.move's own 4 client-visible
+// states (Escrowed/Accepted/Delivered/Released). Free-text on-chain (see
+// checkpoint.move's own comment on why), this is just the frontend's
+// suggested vocabulary per category — a specialist isn't restricted to
+// exactly these, but these are what render as one-tap buttons. The LAST
+// label in each list is the one that also finalizes delivery (calls
+// mark_delivered in the same action) — see CheckpointFlow's
+// isFinalCheckpoint logic below.
+const CHECKPOINT_LABELS: Record<string, string[]> = {
+  logistics: ["Picked up", "En route", "Arrived"],
+  courier: ["Picked up", "En route", "Delivered"],
+  research: ["Inspection started", "Work in progress", "Complete"],
+  design: ["Draft started", "Draft ready for review", "Final delivered"],
+  "legal-review": ["Review started", "Findings drafted", "Review complete"],
+  translation: ["Translation started", "Draft ready", "Final delivered"],
+};
+const DEFAULT_CHECKPOINT_LABELS = ["Started", "In progress", "Complete"];
+
+function checkpointLabelsFor(category: string | undefined): string[] {
+  return (category && CHECKPOINT_LABELS[category]) || DEFAULT_CHECKPOINT_LABELS;
+}
 
 function mistToSui(mist: bigint): string {
   return `${(Number(mist) / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })} SUI`;
@@ -130,6 +165,16 @@ export function SpecialistInbox() {
     );
   }
 
+  // An Accepted deal is active work in progress — surfaced as one focused
+  // screen (like a driver app's "current trip"), not just another card in
+  // a grid, per explicit feedback that the inbox should read like a real
+  // logistics app. If a specialist somehow has more than one Accepted
+  // deal at once, the grid below still shows every deal regardless — this
+  // just picks the most urgent one (soonest deadline, same sort the list
+  // already uses) to feature.
+  const activeJob = deals.find(({ deal }) => deal.status === "Accepted");
+  const otherDeals = activeJob ? deals.filter(({ deal }) => deal.dealId !== activeJob.deal.dealId) : deals;
+
   return (
     <div>
       <div className="mb-6">
@@ -153,18 +198,33 @@ export function SpecialistInbox() {
         </div>
       )}
 
-      {dealsStatus === "ready" && deals.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {deals.map(({ deal, specialistAgentId }) => (
-            <DealCard
-              key={deal.dealId}
-              deal={deal}
-              specialistAgentId={specialistAgentId}
-              metadata={metadataByDeal.get(deal.dealId)}
-              onChanged={() => setRefreshKey((k) => k + 1)}
-            />
-          ))}
+      {dealsStatus === "ready" && activeJob && (
+        <div className="mb-6">
+          <p className="mb-3 text-xs uppercase tracking-wide text-manifest">Active job</p>
+          <ActiveJobScreen
+            deal={activeJob.deal}
+            specialistAgentId={activeJob.specialistAgentId}
+            metadata={metadataByDeal.get(activeJob.deal.dealId)}
+            onChanged={() => setRefreshKey((k) => k + 1)}
+          />
         </div>
+      )}
+
+      {dealsStatus === "ready" && otherDeals.length > 0 && (
+        <>
+          {activeJob && <p className="mb-3 text-xs uppercase tracking-wide text-manifest">Other deals</p>}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {otherDeals.map(({ deal, specialistAgentId }) => (
+              <DealCard
+                key={deal.dealId}
+                deal={deal}
+                specialistAgentId={specialistAgentId}
+                metadata={metadataByDeal.get(deal.dealId)}
+                onChanged={() => setRefreshKey((k) => k + 1)}
+              />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -235,26 +295,12 @@ function DealCard({
   onChanged: () => void;
 }) {
   const dAppKit = useDAppKit();
-  const [deliverable, setDeliverable] = useState("");
-  const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The ORIGINAL amount from DealCreated — see EarningsSummary's header
   // comment for why deal.escrowedAmountMist alone is wrong once released
   // (it's a live balance that correctly reads 0 after payout).
   const displayAmountMist = metadata?.amountMist ?? deal.escrowedAmountMist;
-
-  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const selected = e.target.files?.[0];
-    e.target.value = ""; // allow re-selecting the same file
-    if (!selected) return;
-    setError(null);
-    if (selected.size > MAX_FILE_BYTES) {
-      setError(`${selected.name} is too large — ${MAX_FILE_BYTES / (1024 * 1024)}MB max.`);
-      return;
-    }
-    setFile(selected);
-  }
 
   async function handleAccept() {
     setBusy(true);
@@ -274,65 +320,6 @@ function DealCard({
       onChanged();
     } catch (err) {
       console.error("accept() failed:", err);
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDeliver() {
-    if (!deliverable.trim() && !file) {
-      setError("Write the deliverable or attach a file before marking this delivered.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      // Deal-scoped Seal encryption requires the Deal's own DealAllowlist
-      // — created by the client side right after escrow lock (see
-      // orchestrator.ts's buildCreateDealAllowlistTx step).
-      const allowlistId = await findAllowlistForDeal(deal.dealId);
-      if (!allowlistId) {
-        throw new Error("No DealAllowlist found for this deal yet — the client's escrow-lock step may not have finished.");
-      }
-
-      const textContent = new TextEncoder().encode(deliverable || `(no written notes — see attached file: ${file?.name})`);
-      const encryptedText = await encryptDealContent(textContent, dAppKit.getClient(), allowlistId);
-      const storedText = await storeBlob(encryptedText.encryptedObject);
-
-      // The file, if attached, is a SEPARATE encrypted blob under the same
-      // allowlist — its own random Seal nonce, so it can't be swapped for
-      // the text blob's ciphertext or vice versa.
-      let fileExtra: { blobId: string; seedId: string; name: string; mimeType: string } | undefined;
-      if (file) {
-        const fileBytes = new Uint8Array(await file.arrayBuffer());
-        const encryptedFile = await encryptDealContent(fileBytes, dAppKit.getClient(), allowlistId);
-        const storedFile = await storeBlob(encryptedFile.encryptedObject);
-        fileExtra = {
-          blobId: storedFile.blobId,
-          seedId: encryptedFile.seedId,
-          name: file.name,
-          mimeType: file.type || "application/octet-stream",
-        };
-      }
-
-      const attestation = await mockNautilusAttest(deal.dealId, textContent);
-
-      const tx = buildMarkDeliveredTx({
-        dealId: deal.dealId,
-        specialistAgentIdentityId: specialistAgentId,
-        storageId: storedText.blobId,
-        attestationId: attestation.attestationId,
-        extra: { v: 1, sealSeedId: encryptedText.seedId, file: fileExtra },
-      });
-      const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
-      if (result.FailedTransaction) {
-        throw new Error(result.FailedTransaction.status.error?.message ?? "mark_delivered() failed");
-      }
-      await dAppKit.getClient().core.waitForTransaction({ result });
-      onChanged();
-    } catch (err) {
-      console.error("mark_delivered() failed:", err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -375,52 +362,9 @@ function DealCard({
 
       {deal.status === "Accepted" && (
         <div className="border-t border-border p-5">
-          <label className="text-sm font-medium text-vellum" htmlFor={`deliverable-${deal.dealId}`}>
-            Deliverable
-          </label>
-          <p className="mt-1 text-xs text-manifest">Seal-encrypted and stored on Walrus — only the client can decrypt it.</p>
-          <textarea
-            id={`deliverable-${deal.dealId}`}
-            value={deliverable}
-            onChange={(e) => setDeliverable(e.target.value)}
-            disabled={busy}
-            rows={5}
-            placeholder="Write the real completed work here…"
-            className="mt-3 w-full rounded-lg border border-border bg-ink px-3.5 py-3 text-sm text-vellum placeholder:text-manifest focus:border-accent focus:outline-none disabled:opacity-40"
-          />
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-vellum transition-colors hover:border-white/30">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a5.5 5.5 0 0 1-7.78-7.78l9.2-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.48" />
-              </svg>
-              {file ? "Change file" : "Attach a file"}
-              <input type="file" onChange={handleFileSelect} disabled={busy} className="hidden" />
-            </label>
-            {file && (
-              <span className="flex items-center gap-2 rounded-md bg-surface-hover px-2.5 py-1.5 text-xs text-vellum">
-                <span className="max-w-40 truncate">{file.name}</span>
-                <button
-                  type="button"
-                  onClick={() => setFile(null)}
-                  disabled={busy}
-                  className="text-manifest hover:text-vellum"
-                  aria-label="Remove attached file"
-                >
-                  ✕
-                </button>
-              </span>
-            )}
-          </div>
-
-          <button
-            type="button"
-            onClick={handleDeliver}
-            disabled={busy}
-            className="mt-4 rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {busy ? "Delivering…" : "Mark delivered"}
-          </button>
+          <p className="text-sm text-manifest">
+            Accepted — see the "Active job" section above to push status updates and mark this delivered.
+          </p>
         </div>
       )}
 
@@ -458,6 +402,337 @@ function DealCard({
       )}
 
       {error && <p className="border-t border-border px-5 py-3 text-sm text-wax">{error}</p>}
+    </div>
+  );
+}
+
+/** Focused single-job screen for the deal a specialist is currently
+ * working — the "driver app's current trip" experience per explicit
+ * feedback ("dedicated active job view", "granular live status
+ * updates", "photo/proof capture built into each status update"). Shows
+ * a real checkpoint timeline (DealCheckpoint objects, one per pushed
+ * status — see move/sources/checkpoint.move) above per-category
+ * checkpoint buttons.
+ *
+ * Every checkpoint is a REAL on-chain object, Seal-encrypted photo
+ * included when attached — nothing here is simulated. The LAST
+ * checkpoint in a category's list also finalizes delivery: it pushes
+ * that checkpoint AND calls mark_delivered in the same user action
+ * (reusing the exact deliver-flow this file already had), so
+ * deal.move's own state machine still only ever sees Accepted ->
+ * Delivered, unaffected by however many checkpoints preceded it. */
+function ActiveJobScreen({
+  deal,
+  specialistAgentId,
+  metadata,
+  onChanged,
+}: {
+  deal: SpecialistDeal;
+  specialistAgentId: string;
+  metadata: DealMetadata | undefined;
+  onChanged: () => void;
+}) {
+  const dAppKit = useDAppKit();
+  const [checkpoints, setCheckpoints] = useState<DealCheckpointInfo[] | "loading">("loading");
+  const [note, setNote] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState<string | null>(null); // the label being pushed, or null
+  const [error, setError] = useState<string | null>(null);
+
+  const displayAmountMist = metadata?.amountMist ?? deal.escrowedAmountMist;
+  const labels = checkpointLabelsFor(metadata?.category);
+
+  useEffect(() => {
+    let cancelled = false;
+    findCheckpointsForDeal(deal.dealId)
+      .then((found) => {
+        if (!cancelled) setCheckpoints(found);
+      })
+      .catch(() => {
+        if (!cancelled) setCheckpoints([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deal.dealId]);
+
+  const pushedLabels = new Set((checkpoints === "loading" ? [] : checkpoints).map((c) => c.label));
+  const nextLabel = labels.find((l) => !pushedLabels.has(l)) ?? null;
+  const isFinalCheckpoint = nextLabel !== null && labels.indexOf(nextLabel) === labels.length - 1;
+
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = e.target.files?.[0];
+    e.target.value = "";
+    if (!selected) return;
+    setError(null);
+    if (selected.size > MAX_FILE_BYTES) {
+      setError(`${selected.name} is too large — ${MAX_FILE_BYTES / (1024 * 1024)}MB max.`);
+      return;
+    }
+    setFile(selected);
+  }
+
+  async function encryptPhoto(allowlistId: string): Promise<{ blobId: string; seedId: string } | null> {
+    if (!file) return null;
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    const encrypted = await encryptDealContent(fileBytes, dAppKit.getClient(), allowlistId);
+    const stored = await storeBlob(encrypted.encryptedObject);
+    return { blobId: stored.blobId, seedId: encrypted.seedId };
+  }
+
+  async function handlePushCheckpoint(label: string) {
+    setBusy(label);
+    setError(null);
+    try {
+      const allowlistId = await findAllowlistForDeal(deal.dealId);
+      if (!allowlistId) {
+        throw new Error("No DealAllowlist found for this deal yet — the client's escrow-lock step may not have finished.");
+      }
+
+      const photo = await encryptPhoto(allowlistId);
+
+      const tx = buildPushCheckpointTx({
+        dealId: deal.dealId,
+        specialistAgentIdentityId: specialistAgentId,
+        label,
+        note,
+        photoStorageId: photo?.blobId ?? "",
+        photoSeedId: photo?.seedId ?? "",
+      });
+      const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
+      if (result.FailedTransaction) {
+        throw new Error(result.FailedTransaction.status.error?.message ?? "checkpoint::new_and_share failed");
+      }
+      await dAppKit.getClient().core.waitForTransaction({ result });
+
+      // The final checkpoint in this category's list ALSO finalizes
+      // delivery — same real mark_delivered flow this file already had,
+      // fed from this checkpoint's own note+photo as the deliverable, so
+      // the client's release screen still finds a real DealProof exactly
+      // as before. Checkpoints are additive alongside it, never a
+      // replacement for the on-chain proof mark_delivered records.
+      if (isFinalCheckpoint) {
+        const textContent = new TextEncoder().encode(note || `(no written notes — see attached photo: ${file?.name ?? "none"})`);
+        const encryptedText = await encryptDealContent(textContent, dAppKit.getClient(), allowlistId);
+        const storedText = await storeBlob(encryptedText.encryptedObject);
+
+        let fileExtra: { blobId: string; seedId: string; name: string; mimeType: string } | undefined;
+        if (file && photo) {
+          fileExtra = { blobId: photo.blobId, seedId: photo.seedId, name: file.name, mimeType: file.type || "application/octet-stream" };
+        }
+
+        const attestation = await mockNautilusAttest(deal.dealId, textContent);
+
+        const deliverTx = buildMarkDeliveredTx({
+          dealId: deal.dealId,
+          specialistAgentIdentityId: specialistAgentId,
+          storageId: storedText.blobId,
+          attestationId: attestation.attestationId,
+          extra: { v: 1, sealSeedId: encryptedText.seedId, file: fileExtra },
+        });
+        const deliverResult = await dAppKit.signAndExecuteTransaction({ transaction: deliverTx });
+        if (deliverResult.FailedTransaction) {
+          throw new Error(deliverResult.FailedTransaction.status.error?.message ?? "mark_delivered() failed");
+        }
+        await dAppKit.getClient().core.waitForTransaction({ result: deliverResult });
+      }
+
+      setNote("");
+      setFile(null);
+      onChanged();
+    } catch (err) {
+      console.error("checkpoint push failed:", err);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-accent/30 bg-surface">
+      <div className="flex items-start justify-between gap-4 p-5">
+        <div className="min-w-0">
+          <p className="truncate font-data text-xs text-manifest">{deal.dealId}</p>
+          <p className="mt-1 text-sm text-vellum">{metadata?.category ?? "—"}</p>
+          <p className="mt-1.5 text-2xl font-semibold tracking-tight text-vellum">{mistToSui(displayAmountMist)}</p>
+        </div>
+        <span className="shrink-0 rounded-full border border-accent/40 px-2.5 py-1 text-xs text-accent">In progress</span>
+      </div>
+
+      <div className="border-t border-border p-5">
+        <p className="mb-3 text-sm font-medium text-vellum">Status updates</p>
+        {checkpoints === "loading" && <p className="text-sm text-manifest">Loading…</p>}
+        {checkpoints !== "loading" && checkpoints.length === 0 && (
+          <p className="text-sm text-manifest">No status updates pushed yet.</p>
+        )}
+        {checkpoints !== "loading" && checkpoints.length > 0 && (
+          <div className="flex flex-col gap-3">
+            {checkpoints.map((c) => (
+              <CheckpointRow key={c.checkpointId} checkpoint={c} allowlistIdPromise={() => findAllowlistForDeal(deal.dealId)} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {nextLabel && (
+        <div className="border-t border-border p-5">
+          <label className="text-sm font-medium text-vellum" htmlFor={`note-${deal.dealId}`}>
+            {isFinalCheckpoint ? "Final delivery notes" : "Note for this update"}
+          </label>
+          <p className="mt-1 text-xs text-manifest">
+            Seal-encrypted and stored on Walrus — only the client can decrypt it.
+            {isFinalCheckpoint && " This also marks the deal delivered."}
+          </p>
+          <textarea
+            id={`note-${deal.dealId}`}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            disabled={busy !== null}
+            rows={3}
+            placeholder="What's happening at this step…"
+            className="mt-3 w-full rounded-lg border border-border bg-ink px-3.5 py-3 text-sm text-vellum placeholder:text-manifest focus:border-accent focus:outline-none disabled:opacity-40"
+          />
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <label className="flex cursor-pointer items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-vellum transition-colors hover:border-white/30">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
+              {file ? "Change photo" : "Attach a photo"}
+              <input type="file" accept="image/*" onChange={handleFileSelect} disabled={busy !== null} className="hidden" />
+            </label>
+            {file && (
+              <span className="flex items-center gap-2 rounded-md bg-surface-hover px-2.5 py-1.5 text-xs text-vellum">
+                <span className="max-w-40 truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setFile(null)}
+                  disabled={busy !== null}
+                  className="text-manifest hover:text-vellum"
+                  aria-label="Remove attached photo"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {labels.map((label) => {
+              const done = pushedLabels.has(label);
+              const isNext = label === nextLabel;
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => handlePushCheckpoint(label)}
+                  disabled={busy !== null || !isNext}
+                  title={done ? "Already pushed" : !isNext ? "Push the previous update first" : undefined}
+                  className={`rounded-md px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed ${
+                    done
+                      ? "border border-emerald-500/40 text-emerald-400 opacity-60"
+                      : isNext
+                        ? "bg-white text-black hover:opacity-90"
+                        : "border border-border text-manifest opacity-40"
+                  }`}
+                >
+                  {done ? `✓ ${label}` : busy === label ? "Pushing…" : label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!nextLabel && (
+        <div className="border-t border-border p-5">
+          <p className="flex items-center gap-2 text-sm text-vellum">
+            <span className="text-emerald-500">✓</span>
+            All status updates pushed — delivered.
+          </p>
+          <p className="mt-1 text-sm text-manifest">Waiting on the client to verify and release payment.</p>
+        </div>
+      )}
+
+      {error && <p className="border-t border-border px-5 py-3 text-sm text-wax">{error}</p>}
+    </div>
+  );
+}
+
+/** One row in the checkpoint timeline — label, note, real timestamp, and
+ * a tappable photo thumbnail decrypted ON DEMAND (not eagerly for every
+ * row) via the same envoyKeypair-free, connected-wallet decrypt path
+ * Receipt.tsx already uses for the final deliverable. */
+function CheckpointRow({
+  checkpoint,
+  allowlistIdPromise,
+}: {
+  checkpoint: DealCheckpointInfo;
+  allowlistIdPromise: () => Promise<string | null>;
+}) {
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoStatus, setPhotoStatus] = useState<"idle" | "loading" | "error">("idle");
+
+  function makeSigner() {
+    // Same DAppKit-typing note as Receipt.tsx's own makeSigner: dApp
+    // Kit Core's CurrentAccountSigner constructor param type is
+    // hard-coded to DAppKit<[]> rather than this app's own
+    // module-augmented type — a real typing gap in the library, not a
+    // mistake here (this dAppKit genuinely satisfies the same shape at
+    // runtime).
+    return new CurrentAccountSigner(dAppKitSingleton as unknown as DAppKit);
+  }
+
+  async function handleViewPhoto() {
+    if (!checkpoint.photo) return;
+    setPhotoStatus("loading");
+    try {
+      const allowlistId = await allowlistIdPromise();
+      if (!allowlistId) throw new Error("No DealAllowlist found for this deal.");
+      const encrypted = await readBlob(checkpoint.photo.blobId);
+      const decrypted = await decryptDealContent(encrypted, dAppKitSingleton.getClient(), allowlistId, checkpoint.photo.seedId, makeSigner());
+      const blob = new Blob([new Uint8Array(decrypted)]);
+      setPhotoUrl(URL.createObjectURL(blob));
+      setPhotoStatus("idle");
+    } catch (err) {
+      console.error("checkpoint photo decrypt failed:", err);
+      setPhotoStatus("error");
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (photoUrl) URL.revokeObjectURL(photoUrl);
+    };
+  }, [photoUrl]);
+
+  return (
+    <div className="flex gap-3">
+      <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="text-sm text-vellum">{checkpoint.label}</p>
+          <p className="shrink-0 text-xs text-manifest">{formatDateTime(checkpoint.createdAtMs)}</p>
+        </div>
+        {checkpoint.note && <p className="mt-0.5 text-xs text-manifest">{checkpoint.note}</p>}
+        {checkpoint.photo && (
+          <div className="mt-1.5">
+            {photoUrl ? (
+              <img src={photoUrl} alt={checkpoint.label} className="max-h-40 rounded-md border border-border" />
+            ) : (
+              <button
+                type="button"
+                onClick={handleViewPhoto}
+                disabled={photoStatus === "loading"}
+                className="text-xs text-manifest underline underline-offset-2 hover:text-vellum disabled:opacity-40"
+              >
+                {photoStatus === "loading" ? "Decrypting…" : photoStatus === "error" ? "Failed to load — retry" : "View photo"}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

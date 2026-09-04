@@ -14,11 +14,12 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, LayoutGroup } from "motion/react";
 import { sendChatTurn, type ChatMessage, type ChatAttachment } from "../agent/chat";
-import { createDealAndEscrow } from "./orchestrator";
+import { createDealAndEscrow, createDealChain } from "./orchestrator";
 import { releaseDeal, reconstructPendingRelease } from "./release";
+import { tryAdvanceChain } from "./chainAdvance";
 import { findDealById, findProofForDeal, type DealStatusName } from "../sui/deal-queries";
 import type { OnboardingResult } from "./Onboarding";
-import type { AttachmentInfo, ConversationTurn, DealReceipt, PendingRelease, StatusStep } from "./types";
+import type { AttachmentInfo, ChainInfo, ConversationTurn, DealReceipt, PendingRelease, StatusStep } from "./types";
 import { GENERAL_THREAD_ID } from "./types";
 import { StepList } from "./StatusFeed";
 import { Markdown } from "./components/Markdown";
@@ -263,52 +264,108 @@ export function ChatPanel({
         return;
       }
 
-      // result.kind === "start_deal" — hand off to the real orchestrator,
-      // rendering its live steps inline as this turn progresses. This only
-      // runs the client side through escrow lock — a real specialist then
-      // has to accept/deliver from their own inbox (SpecialistInbox.tsx)
-      // before this deal can be released, so it does NOT finish in one
-      // synchronous call anymore. Once escrowed, the Deals tab takes over
-      // (polls live status, shows the Verify & Release button).
-      const dealId = crypto.randomUUID();
-      // Move the triggering message into this deal's own thread (see the
-      // header note above) and add the deal turn under the same thread —
-      // this is what makes "one thread per deal" real: everything about
-      // this deal, including the message that started it, lives together.
+      if (result.kind === "start_deal") {
+        // Hand off to the real orchestrator, rendering its live steps
+        // inline as this turn progresses. This only runs the client side
+        // through escrow lock — a real specialist then has to
+        // accept/deliver from their own inbox (SpecialistInbox.tsx)
+        // before this deal can be released, so it does NOT finish in one
+        // synchronous call anymore. Once escrowed, the Deals tab takes
+        // over (polls live status, shows the Verify & Release button).
+        const dealId = crypto.randomUUID();
+        // Move the triggering message into this deal's own thread (see
+        // the header note above) and add the deal turn under the same
+        // thread — this is what makes "one thread per deal" real:
+        // everything about this deal, including the message that started
+        // it, lives together.
+        onTurnsChange((prev) => [
+          ...prev.map((t) =>
+            t.kind === "text" && t.threadId === activeThreadId && t.text === sentText && t.role === "user"
+              ? { ...t, threadId: dealId }
+              : t,
+          ),
+          { kind: "deal", id: dealId, task: result.task, steps: [], receipt: null, pending: null, threadId: dealId },
+        ]);
+        onThreadCreated(dealId, result.task);
+
+        createDealAndEscrow(result.task, connectedAddress, onboarding, {
+          onStepsChange: (nextSteps: StatusStep[]) => {
+            onTurnsChange((prev) =>
+              prev.map((t) => (t.kind === "deal" && t.id === dealId ? { ...t, steps: nextSteps } : t)),
+            );
+          },
+          onEscrowed: (pending: PendingRelease) => {
+            onTurnsChange((prev) =>
+              prev.map((t) => (t.kind === "deal" && t.id === dealId ? { ...t, pending } : t)),
+            );
+            setBusy(false);
+          },
+        }).catch((err: unknown) => {
+          // The failing step's own detail already carries the specific
+          // reason (see fail() in orchestrator.ts and StepList's
+          // rendering of it) — this just unblocks the input again rather
+          // than leaving the chat stuck mid-turn.
+          onTurnsChange((prev) => [
+            ...prev,
+            {
+              kind: "text",
+              role: "assistant",
+              text: `That didn't go through: ${err instanceof Error ? err.message : String(err)}`,
+              threadId: dealId,
+            },
+          ]);
+          setBusy(false);
+        });
+        return;
+      }
+
+      // result.kind === "start_deal_chain" — same shape as start_deal,
+      // but only leg 0 is escrowed here (createDealChain is a thin
+      // wrapper around createDealAndEscrow for exactly that leg). Leg 1+
+      // are created later, gated on each prior leg's real on-chain proof
+      // — see chainAdvance.ts's tryAdvanceChain, polled from
+      // DealProgress below once this leg's `pending` exists.
+      const chainId = crypto.randomUUID();
+      const leg0 = result.legs[0];
+      const chain: ChainInfo = {
+        chainId,
+        legIndex: 0,
+        legTotal: result.legs.length,
+        remainingLegs: result.legs.slice(1),
+      };
       onTurnsChange((prev) => [
         ...prev.map((t) =>
           t.kind === "text" && t.threadId === activeThreadId && t.text === sentText && t.role === "user"
-            ? { ...t, threadId: dealId }
+            ? { ...t, threadId: chainId }
             : t,
         ),
-        { kind: "deal", id: dealId, task: result.task, steps: [], receipt: null, pending: null, threadId: dealId },
+        { kind: "deal", id: chainId, task: leg0.taskDescription, steps: [], receipt: null, pending: null, threadId: chainId, chain },
       ]);
-      onThreadCreated(dealId, result.task);
+      // The chain's thread is titled from the ORIGINAL multi-phase
+      // request, not leg 0's narrower taskDescription, so the sidebar
+      // reads e.g. "Laptop screen repair" rather than "Pick up laptop."
+      onThreadCreated(chainId, sentText);
 
-      createDealAndEscrow(result.task, connectedAddress, onboarding, {
+      createDealChain(result.legs, connectedAddress, onboarding, {
         onStepsChange: (nextSteps: StatusStep[]) => {
           onTurnsChange((prev) =>
-            prev.map((t) => (t.kind === "deal" && t.id === dealId ? { ...t, steps: nextSteps } : t)),
+            prev.map((t) => (t.kind === "deal" && t.id === chainId ? { ...t, steps: nextSteps } : t)),
           );
         },
         onEscrowed: (pending: PendingRelease) => {
           onTurnsChange((prev) =>
-            prev.map((t) => (t.kind === "deal" && t.id === dealId ? { ...t, pending } : t)),
+            prev.map((t) => (t.kind === "deal" && t.id === chainId ? { ...t, pending } : t)),
           );
           setBusy(false);
         },
       }).catch((err: unknown) => {
-        // The failing step's own detail already carries the specific
-        // reason (see fail() in orchestrator.ts and StepList's rendering
-        // of it) — this just unblocks the input again rather than
-        // leaving the chat stuck mid-turn.
         onTurnsChange((prev) => [
           ...prev,
           {
             kind: "text",
             role: "assistant",
             text: `That didn't go through: ${err instanceof Error ? err.message : String(err)}`,
-            threadId: dealId,
+            threadId: chainId,
           },
         ]);
         setBusy(false);
@@ -478,18 +535,41 @@ export function ChatPanel({
                         )}
                         {turn.kind === "error" && <MessageBubble role="assistant" text={turn.text} isError />}
                         {turn.kind === "deal" && (
-                          <DealProgress
-                            task={turn.task}
-                            steps={turn.steps}
-                            pending={turn.pending}
-                            receipt={turn.receipt}
-                            onReleased={(receipt) => {
-                              onTurnsChange((prev) =>
-                                prev.map((t) => (t.kind === "deal" && t.id === turn.id ? { ...t, receipt } : t)),
-                              );
-                              onDealReleased(receipt);
-                            }}
-                          />
+                          <>
+                            {turn.chain && <ChainLegHeader legIndex={turn.chain.legIndex} legTotal={turn.chain.legTotal} task={turn.task} />}
+                            <DealProgress
+                              task={turn.task}
+                              steps={turn.steps}
+                              pending={turn.pending}
+                              receipt={turn.receipt}
+                              chain={turn.chain ?? null}
+                              threadId={turn.threadId}
+                              // Only the LATEST leg of its chain should ever
+                              // poll to advance the chain — otherwise every
+                              // resolved earlier leg would independently
+                              // try to create the next one too, racing
+                              // itself. "Latest" is computed here (where
+                              // the full turns array is in scope) rather
+                              // than inside DealProgress, so a duplicate
+                              // advance is structurally prevented rather
+                              // than merely debounced.
+                              isLatestUnadvancedLeg={
+                                !!turn.chain &&
+                                !turns.some(
+                                  (t) => t.kind === "deal" && t.chain?.chainId === turn.chain!.chainId && t.chain.legIndex > turn.chain!.legIndex,
+                                )
+                              }
+                              connectedAddress={connectedAddress}
+                              onboarding={onboarding}
+                              onTurnsChange={onTurnsChange}
+                              onReleased={(receipt) => {
+                                onTurnsChange((prev) =>
+                                  prev.map((t) => (t.kind === "deal" && t.id === turn.id ? { ...t, receipt } : t)),
+                                );
+                                onDealReleased(receipt);
+                              }}
+                            />
+                          </>
                         )}
                       </motion.div>
                     ))}
@@ -551,6 +631,18 @@ function liveStatusDetail(status: DealStatusName, pending: PendingRelease): stri
   }
 }
 
+/** Small label above a DealProgress card that's one leg of a multi-agent
+ * chain — "Part 2 of 3 · repair the laptop" — so the reader immediately
+ * understands this is one step of a larger sequence, not a standalone
+ * deal. Purely presentational; rendered only when turn.chain is set. */
+function ChainLegHeader({ legIndex, legTotal, task }: { legIndex: number; legTotal: number; task: string }) {
+  return (
+    <p className="mb-1.5 text-xs uppercase tracking-wide text-manifest">
+      Part {legIndex + 1} of {legTotal} · {task}
+    </p>
+  );
+}
+
 const LIVE_STATUS_LABEL: Partial<Record<DealStatusName, string>> = {
   Escrowed: "Waiting for the specialist to accept…",
   Accepted: "Accepted — waiting for delivery…",
@@ -579,12 +671,30 @@ function DealProgress({
   steps,
   pending,
   receipt,
+  chain,
+  threadId,
+  isLatestUnadvancedLeg,
+  connectedAddress,
+  onboarding,
+  onTurnsChange,
   onReleased,
 }: {
   task: string;
   steps: StatusStep[];
   pending: PendingRelease | null;
   receipt: DealReceipt | null;
+  /** Non-null only when this turn is one leg of a multi-agent chain — see
+   * types.ts's ChainInfo and chainAdvance.ts. */
+  chain: ChainInfo | null;
+  threadId: string;
+  /** True only for the single turn that should poll to advance the chain
+   * — computed by the caller from the full turns array (see the render
+   * call site) so a duplicate advance is structurally prevented rather
+   * than merely debounced. Always false for a non-chain deal. */
+  isLatestUnadvancedLeg: boolean;
+  connectedAddress: string | undefined;
+  onboarding: OnboardingResult;
+  onTurnsChange: (update: (prev: ConversationTurn[]) => ConversationTurn[]) => void;
   onReleased: (receipt: DealReceipt) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -683,6 +793,38 @@ function DealProgress({
       cancelled = true;
     };
   }, [effectivePending, receipt, liveStatus, onReleased]);
+
+  // Drives a multi-agent chain forward: once this leg's real on-chain
+  // delivery proof exists, posts a summary of it to chat and (if more
+  // legs remain) escrows the next one — see chainAdvance.ts. Reuses the
+  // same POLL_INTERVAL_MS this component already polls liveStatus on,
+  // gated on isLatestUnadvancedLeg (computed by the caller from the full
+  // turns array) so only one turn per chain ever attempts this, and on
+  // effectivePending existing (nothing to gate on before escrow locks).
+  // tryAdvanceChain itself re-derives everything it needs from chain
+  // (findProofForDeal), never trusting only in-memory state — same
+  // principle as reconstructPendingRelease and the self-heal effect
+  // above — so a page refresh mid-chain cannot strand it.
+  useEffect(() => {
+    if (!chain || !isLatestUnadvancedLeg || !effectivePending) return;
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        await tryAdvanceChain({ task, threadId, pending: effectivePending!, chain: chain! }, connectedAddress, onboarding, onTurnsChange);
+      } catch (err) {
+        if (!cancelled) console.error("DealProgress chain-advance failed for", effectivePending!.dealId, err);
+      }
+    }
+
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chain, isLatestUnadvancedLeg, effectivePending, connectedAddress, onboarding, onTurnsChange]);
 
   // Once escrow locks, orchestrator.ts's static steps stop at
   // "work-in-progress" and never change again — it has no way to know what
