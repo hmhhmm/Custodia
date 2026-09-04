@@ -15,14 +15,14 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, LayoutGroup } from "motion/react";
 import { sendChatTurn, type ChatMessage, type ChatAttachment } from "../agent/chat";
 import { createDealAndEscrow } from "./orchestrator";
-import { releaseDeal } from "./release";
-import { findDealById, type DealStatusName } from "../sui/deal-queries";
+import { releaseDeal, reconstructPendingRelease } from "./release";
+import { findDealById, findProofForDeal, type DealStatusName } from "../sui/deal-queries";
 import type { OnboardingResult } from "./Onboarding";
 import type { AttachmentInfo, ConversationTurn, DealReceipt, PendingRelease, StatusStep } from "./types";
 import { GENERAL_THREAD_ID } from "./types";
 import { StepList } from "./StatusFeed";
 import { Markdown } from "./components/Markdown";
-import { ChatThreadSidebar } from "./ChatThreadSidebar";
+import { ChatThreadSidebar, deriveThreads } from "./ChatThreadSidebar";
 
 // SpeechRecognition (and its instance methods/events) isn't part of
 // TypeScript's standard DOM lib yet. SpeechRecognitionEvent already is
@@ -149,10 +149,21 @@ export function ChatPanel({
   const [busy, setBusy] = useState(false);
   const [pendingFile, setPendingFile] = useState<{ file: File; previewUrl?: string } | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  // User-controlled hide, independent of whether any thread exists —
+  // "make it able to hide it" was explicit. Starts open; once the user
+  // hides it, it stays hidden until they reopen it (not tied to nav or
+  // thread switches — a manual view preference, not derived state).
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const threadTurns = turns.filter((t) => t.threadId === activeThreadId);
   const started = threadTurns.length > 0;
+  // No real conversation exists yet (fresh wallet, nothing sent) — the
+  // sidebar and its "New chat" button have nothing meaningful to show,
+  // so they're not rendered at all rather than showing an empty shell
+  // with a placeholder "General" row before anything ever happened.
+  const hasAnyThreads = deriveThreads(turns).length > 0;
+  const showSidebar = hasAnyThreads && !sidebarHidden;
   const speech = useSpeechToText((transcript) => {
     setInput((prev) => (prev.trim().length > 0 ? `${prev} ${transcript}` : transcript));
   });
@@ -409,14 +420,31 @@ export function ChatPanel({
 
   return (
     <div className="flex h-full">
-      <ChatThreadSidebar
-        turns={turns}
-        activeThreadId={activeThreadId}
-        onSelectThread={onSelectThread}
-        onNewChat={() => onSelectThread(GENERAL_THREAD_ID)}
-      />
+      {showSidebar && (
+        <ChatThreadSidebar
+          turns={turns}
+          activeThreadId={activeThreadId}
+          onSelectThread={onSelectThread}
+          onNewChat={() => onSelectThread(GENERAL_THREAD_ID)}
+          onCollapse={() => setSidebarHidden(true)}
+        />
+      )}
       <LayoutGroup>
-        <div className="flex h-full min-w-0 flex-1 flex-col">
+        <div className="relative flex h-full min-w-0 flex-1 flex-col">
+          {hasAnyThreads && sidebarHidden && (
+            <button
+              type="button"
+              onClick={() => setSidebarHidden(false)}
+              title="Show sidebar"
+              aria-label="Show sidebar"
+              className="absolute left-4 top-4 z-10 rounded-lg border border-border bg-ink p-2 text-manifest transition-colors hover:border-white/30 hover:text-vellum sm:left-8"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M9 4v16" />
+              </svg>
+            </button>
+          )}
           {!started ? (
           <motion.div layout className="flex h-full flex-col items-center justify-center px-4 pb-[18vh]">
             <motion.p layout className="text-3xl font-normal text-vellum sm:text-4xl">
@@ -495,10 +523,34 @@ const LIVE_STATUS_STEP_INDEX: Partial<Record<DealStatusName, number>> = {
   Escrowed: 5,
   Accepted: 5,
   Delivered: 6,
-  Verified: 7,
-  Released: 8,
+  Verified: 6,
+  Released: 7,
   Settled: 8,
 };
+// Builds a fuller live-status detail using whatever real counterparty/
+// amount info the reconstructed PendingRelease carries — "add more info,
+// no need to compact it" was explicit feedback, so these read as a real
+// status log rather than a terse label once escrow has locked.
+function liveStatusDetail(status: DealStatusName, pending: PendingRelease): string {
+  const amount = pending.amountSui.toFixed(4);
+  switch (status) {
+    case "Escrowed":
+      return `${amount} SUI is locked in escrow, waiting for ${pending.counterpartyName} to accept the offer from their own specialist inbox. Nothing moves until they do — if they never accept, the escrow refunds back to the Mandate once the delivery window lapses.`;
+    case "Accepted":
+      return `${pending.counterpartyName} accepted the offer with their own wallet signature and is now working on the delivery. ${amount} SUI stays locked in escrow until they mark it delivered and it's verified.`;
+    case "Delivered":
+      return `${pending.counterpartyName} marked the work delivered and uploaded proof (Seal-encrypted, stored on Walrus). Ready to verify and release — click below to confirm delivery and pay out the ${amount} SUI.`;
+    case "Verified":
+      return `Delivery verified. Releasing ${amount} SUI to ${pending.counterpartyName} on-chain.`;
+    case "Released":
+      return `${amount} SUI has been paid to ${pending.counterpartyName}'s wallet — confirmed by re-reading their live on-chain balance before and after, not just trusting the transaction didn't abort.`;
+    case "Settled":
+      return `This deal is fully settled on-chain.`;
+    default:
+      return status;
+  }
+}
+
 const LIVE_STATUS_LABEL: Partial<Record<DealStatusName, string>> = {
   Escrowed: "Waiting for the specialist to accept…",
   Accepted: "Accepted — waiting for delivery…",
@@ -540,19 +592,52 @@ function DealProgress({
   const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
+  const [reconstructedPending, setReconstructedPending] = useState<PendingRelease | null>(null);
 
   const failed = steps.some((s) => s.state === "failed");
+  // A turn's `pending` field can be permanently null even after real
+  // escrow (e.g. onEscrowed's write raced a page reload, or an older
+  // saved session predates a fix) — steps[4]'s own detail text always
+  // carries the real dealId once escrow locks (see orchestrator.ts's
+  // `Deal ${dealId} created and escrowed on-chain`), which is enough to
+  // rebuild everything else from chain via reconstructPendingRelease.
+  // Without this, a turn stuck with pending: null can NEVER poll or
+  // self-heal — this is what kept the exact same deal showing "Waiting
+  // for specialist" in Chat while ProgressView (which always
+  // reconstructs from a bare dealId) correctly showed Released.
+  const escrowDetail = steps[4]?.detail;
+  const dealIdFromSteps = typeof escrowDetail === "string" ? escrowDetail.match(/Deal (0x[0-9a-f]+) created/)?.[1] : undefined;
+  const effectivePending = pending ?? reconstructedPending;
 
   useEffect(() => {
-    if (!pending || receipt) return;
+    if (pending || !dealIdFromSteps || reconstructedPending) return;
+    let cancelled = false;
+    reconstructPendingRelease(dealIdFromSteps)
+      .then((found) => {
+        if (!cancelled && found) setReconstructedPending(found);
+      })
+      .catch((err) => {
+        console.error("DealProgress pending reconstruction failed for", dealIdFromSteps, err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pending, dealIdFromSteps, reconstructedPending]);
+
+  useEffect(() => {
+    if (!effectivePending || receipt) return;
     let cancelled = false;
 
     async function poll() {
       try {
-        const deal = await findDealById(pending!.dealId);
+        const deal = await findDealById(effectivePending!.dealId);
         if (!cancelled && deal) setLiveStatus(deal.status);
-      } catch {
-        // Transient GraphQL hiccup — next poll tick will retry.
+      } catch (err) {
+        // Transient GraphQL hiccup — next poll tick will retry. Logged
+        // (not silently swallowed) since a genuinely stuck poll here
+        // previously looked identical to "the chat status is wrong,"
+        // when the real cause could be every fetch quietly failing.
+        console.error("DealProgress poll failed for", effectivePending!.dealId, err);
       }
     }
 
@@ -562,27 +647,72 @@ function DealProgress({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [pending, receipt]);
+  }, [effectivePending, receipt]);
+
+  // Self-heals a turn whose receipt never got written back into `turns`
+  // — e.g. it was released from ProgressView reached via a chain-derived
+  // Dashboard card, a path that (before this fix) silently skipped the
+  // `turns` update entirely. Rather than depend on every possible release
+  // path remembering to write back correctly, this makes Chat's own
+  // polling authoritative: the moment it independently observes
+  // Released/Settled on-chain, it reconstructs a real receipt from chain
+  // (the delivery proof + the original DealCreated amount) and reports it
+  // up, so `turns` — and therefore what Chat shows — can never disagree
+  // with the real on-chain state for long.
+  useEffect(() => {
+    if (receipt || !effectivePending) return;
+    if (liveStatus !== "Released" && liveStatus !== "Settled") return;
+    let cancelled = false;
+
+    findProofForDeal(effectivePending.dealId)
+      .then((proof) => {
+        if (cancelled || !proof) return;
+        onReleased({
+          dealId: effectivePending.dealId,
+          amount: effectivePending.amountSui,
+          counterpartyName: effectivePending.counterpartyName,
+          verification: { mocked: true, attestationId: proof.storageId },
+          deliverable: { blobId: proof.storageId, allowlistId: effectivePending.allowlistId, seedId: proof.seedId, file: proof.file },
+        });
+      })
+      .catch((err) => {
+        console.error("DealProgress self-heal failed for", effectivePending.dealId, err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectivePending, receipt, liveStatus, onReleased]);
 
   // Once escrow locks, orchestrator.ts's static steps stop at
-  // "work-in-progress" (labeled "Waiting for specialist") and never
-  // change again — it has no way to know what a real specialist does in
-  // their own separate session. Rather than bolt a second, separately
-  // worded status panel underneath the frozen list (which is what
-  // produced the contradiction: list says "Waiting for specialist" while
-  // a panel below says "Delivered, ready to release"), overlay liveStatus
-  // onto the SAME steps array so there is exactly one story on screen.
+  // "work-in-progress" and never change again — it has no way to know what
+  // a real specialist does in their own separate session. Rather than bolt
+  // a second, separately worded status panel underneath the frozen list
+  // (which is what produced the contradiction: the step list frozen on
+  // "waiting" while a panel below says "Delivered, ready to release"),
+  // overlay liveStatus onto the SAME steps array so there is exactly one
+  // story on screen.
+  //
+  // A turn that already carries a `receipt` (release already happened and
+  // was written back — e.g. across a page reload, or via the self-heal
+  // effect above) must NOT depend on the poll effect to learn that: that
+  // effect explicitly bails out `if (receipt) return` and so never sets
+  // `liveStatus`, leaving it permanently null and this overlay a no-op —
+  // exactly what left a genuinely Released deal frozen on "Waiting for
+  // specialist" in Chat while ProgressView (no such gate) showed Released.
+  // A receipt is itself proof of the terminal state, so treat it as one.
+  const effectiveLiveStatus: DealStatusName | null = receipt ? "Released" : liveStatus;
   const displaySteps: StatusStep[] = (() => {
-    if (!pending || !liveStatus) return steps;
-    const targetIndex = LIVE_STATUS_STEP_INDEX[liveStatus];
+    if (!effectivePending || !effectiveLiveStatus) return steps;
+    const targetIndex = LIVE_STATUS_STEP_INDEX[effectiveLiveStatus];
     if (targetIndex === undefined) return steps;
     return steps.map((step, i) => {
       if (i < targetIndex) return step.state === "done" ? step : { ...step, state: "done" as const };
       if (i === targetIndex) {
         return {
           ...step,
-          state: liveStatus === "Released" || liveStatus === "Settled" ? ("done" as const) : ("active" as const),
-          detail: LIVE_STATUS_LABEL[liveStatus] ?? step.detail,
+          state: effectiveLiveStatus === "Released" || effectiveLiveStatus === "Settled" ? ("done" as const) : ("active" as const),
+          detail: effectivePending ? liveStatusDetail(effectiveLiveStatus, effectivePending) : (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? step.detail),
         };
       }
       return step.state === "pending" ? step : { ...step, state: "pending" as const, detail: undefined };
@@ -599,7 +729,7 @@ function DealProgress({
   // OR chain (a real bug this same file had until this fix: `|| !pending`
   // made a barely-started deal show "Done" before escrow even existed).
   const allStepsDone = displaySteps.length > 0 && displaySteps.every((s) => s.state === "done");
-  const allDone = allStepsDone && (Boolean(receipt) || liveStatus === "Released" || liveStatus === "Settled");
+  const allDone = allStepsDone && (Boolean(receipt) || effectiveLiveStatus === "Released" || effectiveLiveStatus === "Settled");
 
   useEffect(() => {
     if (allDone && !autoCollapsed) {
@@ -612,11 +742,11 @@ function DealProgress({
   }, [allDone, autoCollapsed]);
 
   async function handleRelease() {
-    if (!pending) return;
+    if (!effectivePending) return;
     setReleasing(true);
     setReleaseError(null);
     try {
-      const finalReceipt = await releaseDeal(pending);
+      const finalReceipt = await releaseDeal(effectivePending);
       onReleased(finalReceipt);
     } catch (err) {
       setReleaseError(err instanceof Error ? err.message : String(err));
@@ -629,8 +759,8 @@ function DealProgress({
     ? "Something went wrong"
     : allDone
       ? "Done"
-      : pending && liveStatus
-        ? (LIVE_STATUS_LABEL[liveStatus] ?? "Working…")
+      : effectivePending && effectiveLiveStatus
+        ? (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? "Working…")
         : displaySteps.find((s) => s.state === "active")?.label ?? "Working…";
 
   return (
@@ -661,7 +791,7 @@ function DealProgress({
               <p className="mb-4 text-xs text-manifest">Task: {task}</p>
               <StepList steps={displaySteps} />
 
-              {pending && !receipt && liveStatus === "Delivered" && (
+              {effectivePending && !receipt && liveStatus === "Delivered" && (
                 <div className="mt-4 border-t border-border pt-4">
                   <button
                     type="button"
