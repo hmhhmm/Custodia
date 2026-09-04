@@ -29,6 +29,18 @@ function dealStatusLabel(turn: Extract<ConversationTurn, { kind: "deal" }>): str
   return "Setting up";
 }
 
+/** For a multi-agent chain, "Part i of N — {leg status}" — computed from
+ * whichever leg turn is LATEST for this chainId (every leg shares the
+ * same threadId, so they all land in the same sidebar row; this is what
+ * makes that row's status reflect the CURRENT leg, not a stale early
+ * one). Plain dealStatusLabel for a non-chain deal turn. */
+function chainAwareStatusLabel(latestLegTurn: Extract<ConversationTurn, { kind: "deal" }>): string {
+  const base = dealStatusLabel(latestLegTurn);
+  if (!latestLegTurn.chain) return base;
+  const { legIndex, legTotal } = latestLegTurn.chain;
+  return `Part ${legIndex + 1} of ${legTotal} — ${base}`;
+}
+
 /** Derives the thread list from the flat turns array. Unlike the old
  * version, General is only included once it actually HAS a turn in it —
  * a brand-new wallet with zero messages ever sent has zero threads, not
@@ -46,11 +58,20 @@ export function deriveThreads(turns: ConversationTurn[]): ThreadSummary[] {
       return;
     }
     if (turn.kind === "deal") {
+      const existing = dealThreads.get(turn.threadId);
+      // For a multi-agent chain, the thread's title should stay the
+      // ORIGINAL multi-phase request (leg 0's title, set once via
+      // ChatPanel.tsx's onThreadCreated call), not flip to whichever
+      // leg's narrower taskDescription was seen most recently as the
+      // chain advances — a chain thread's `existing.title` is preserved
+      // once set. A non-chain deal has only ever had one task, so this
+      // is a no-op for it either way.
+      const title = turn.chain && existing?.title ? existing.title : turn.task;
       dealThreads.set(turn.threadId, {
         threadId: turn.threadId,
-        title: turn.task,
+        title,
         isDeal: true,
-        statusLabel: dealStatusLabel(turn),
+        statusLabel: chainAwareStatusLabel(turn),
         lastActivityIndex: i,
       });
     } else if (!dealThreads.has(turn.threadId)) {

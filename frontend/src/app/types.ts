@@ -124,7 +124,24 @@ export interface PendingRelease {
  * single endless list — see ChatThreadList.tsx. */
 export const GENERAL_THREAD_ID = "general";
 
+/** Links a "deal" turn to its siblings in a multi-agent chain — e.g. the
+ * pickup/repair/return sequence one complicated Chat request can produce
+ * (see chainAdvance.ts). Optional and purely additive: every existing
+ * single-deal turn simply omits it and behaves exactly as before this
+ * field existed. `chainId` doubles as the shared thread id for the whole
+ * chain (one thread, N deal turns) — see ChatPanel.tsx's start_deal_chain
+ * handling. */
+export interface ChainInfo {
+  chainId: string;
+  legIndex: number;
+  legTotal: number;
+  /** Legs not yet started, in order — the ENTIRE remaining plan, not just
+   * the next one, so creating leg i+1 never needs to reconstruct leg i+2's
+   * brief from anywhere else. Empty on the last leg. */
+  remainingLegs: { category: string; taskDescription: string }[];
+}
+
 export type ConversationTurn =
   | { kind: "text"; role: "user" | "assistant"; text: string; attachment?: AttachmentInfo; threadId: string }
-  | { kind: "deal"; id: string; task: string; steps: StatusStep[]; receipt: DealReceipt | null; pending: PendingRelease | null; threadId: string }
+  | { kind: "deal"; id: string; task: string; steps: StatusStep[]; receipt: DealReceipt | null; pending: PendingRelease | null; threadId: string; chain?: ChainInfo }
   | { kind: "error"; text: string; threadId: string };

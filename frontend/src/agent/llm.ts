@@ -132,3 +132,48 @@ export async function summarizeDealTitle(category: string, amountSui: number): P
     return category;
   }
 }
+
+/**
+ * Summarizes a real decrypted deliverable (deal proof text, e.g. a
+ * specialist's pickup/repair/delivery notes) into one plain-language
+ * paragraph for the client, posted back into chat once that leg of a
+ * multi-agent chain releases — see chainAdvance.ts's
+ * summarizeAndPostProof.
+ *
+ * Soft-degrading like summarizeDealTitle above, NOT a hard JSON contract
+ * like interpretGoal: this is prose with no schema to violate, so a
+ * failure here must never be presented as a summary — it falls back to
+ * the raw deliverable text itself (truncated), never a fabricated
+ * paraphrase, per this codebase's rule against ever making a simulated
+ * or degraded result look indistinguishable from a real one.
+ */
+export async function summarizeProofContent(deliverableText: string, legDescription: string): Promise<string> {
+  const RAW_FALLBACK_CHARS = 500;
+  const rawFallback = () =>
+    `${deliverableText.slice(0, RAW_FALLBACK_CHARS)}${deliverableText.length > RAW_FALLBACK_CHARS ? "…" : ""} (showing raw delivery notes — summarization unavailable)`;
+
+  if (!GEMINI_API_KEY) return rawFallback();
+
+  const prompt = `A specialist just completed and delivered this task: "${legDescription}". Their delivery notes are below. Write ONE short plain-language paragraph (2-3 sentences) telling the client what was done, in a professional but warm tone, as if reporting back after completing their job. Do not invent details not present in the notes. Respond with ONLY the paragraph, nothing else.
+
+Delivery notes:
+"""
+${deliverableText}
+"""`;
+
+  try {
+    const response = await fetch(`${GEMINI_ENDPOINT}?key=${GEMINI_API_KEY}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    if (!response.ok) return rawFallback();
+
+    const result = await response.json();
+    const text: string | undefined = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const cleaned = text?.trim();
+    return cleaned || rawFallback();
+  } catch {
+    return rawFallback();
+  }
+}

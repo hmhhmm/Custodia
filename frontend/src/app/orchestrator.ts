@@ -251,3 +251,31 @@ export async function createDealAndEscrow(
     seedId: "",
   });
 }
+
+/**
+ * Starts a multi-agent chain (2-3 sequential Deals) by escrowing ONLY the
+ * first leg — this is a thin wrapper around createDealAndEscrow above,
+ * completely unmodified, not a new PTB sequence. Deal is strictly
+ * two-party; a "chain" is several ordinary Deals created one after
+ * another, not a new contract primitive.
+ *
+ * Leg 1+ are NOT created here: each later leg is gated on the PRIOR
+ * leg's real on-chain delivery proof, which depends on a genuinely
+ * separate specialist accepting and delivering in their own browser
+ * session — an out-of-band action that can take minutes to hours, so it
+ * cannot be driven synchronously inside one function call the way
+ * escrow-lock is. See chainAdvance.ts's tryAdvanceChain, polled from
+ * ChatPanel.tsx's DealProgress, for how subsequent legs actually get
+ * created once each prior leg's proof lands.
+ */
+export async function createDealChain(
+  legs: { category: string; taskDescription: string }[],
+  connectedAddress: string | undefined,
+  onboarding: OnboardingResult,
+  handlers: {
+    onStepsChange: (steps: StatusStep[]) => void;
+    onEscrowed: (pending: PendingRelease) => void;
+  },
+): Promise<void> {
+  await createDealAndEscrow(legs[0].taskDescription, connectedAddress, onboarding, handlers);
+}

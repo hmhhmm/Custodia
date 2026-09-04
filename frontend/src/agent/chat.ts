@@ -17,6 +17,12 @@
 //
 // CATEGORY LIST IS NOT ARBITRARY — same constraint as llm.ts's
 // interpretGoal: must match Onboarding.tsx's Mandate allowedCategories.
+// start_deal_chain's `category` enum below imports MANDATE_CATEGORIES
+// directly rather than re-listing it, so the two can never drift the way
+// this project has already been bitten by once (see llm.ts's own header
+// note on the same constraint).
+
+import { MANDATE_CATEGORIES } from "../app/Onboarding";
 
 const GEMINI_API_KEY: string | undefined = import.meta.env.VITE_GEMINI_API_KEY;
 const GEMINI_MODEL = "gemini-3.7-flash";
@@ -27,6 +33,8 @@ const SYSTEM_INSTRUCTION = `You are Envoy, the personal assistant inside Custodi
 When a message describes something the user actually needs DONE by a specialist — legal review, courier/delivery, translation, logistics, design work, or research — and real payment should be held in escrow until it's verified, call start_deal instead of replying in text. Only call start_deal for genuine tasks with real stakes, never for hypothetical questions, small talk, or requests to explain how Custodia works.
 
 Before calling start_deal, act like a professional operations assistant, not a form-filler: if the task as described is genuinely ambiguous in a way that would materially change what gets escrowed or who gets matched — e.g. no indication of scope/urgency/budget expectations, or the request could reasonably mean two different things — ask ONE concise clarifying question in plain text instead of calling start_deal immediately. Once the user replies, use their answer (plus the rest of the conversation) to call start_deal. Do not ask a clarifying question if the task is already reasonably clear — most real requests are; over-asking is as unprofessional as under-asking.
+
+Some requests genuinely need MULTIPLE different specialists working in sequence, where a later phase cannot even begin until an earlier phase's real work is done — for example "pick up my broken laptop, get it repaired, and send it back" needs a logistics specialist for pickup, then a separate repair specialist, then a courier for return, in that order, each waiting on the last. For a request like that, call start_deal_chain instead of start_deal, with 2-3 ordered legs (each its own category and task description). Only use start_deal_chain when the phases are truly sequential and handled by genuinely different kinds of specialists — do not use it for a task one specialist could do in a single engagement, even if it has multiple steps; that is still start_deal.
 
 For everything else — questions, chat, requests to explain something, brainstorming — just reply normally in text.`;
 
@@ -46,6 +54,38 @@ const TOOLS = [
             },
           },
           required: ["task"],
+        },
+      },
+      {
+        name: "start_deal_chain",
+        description:
+          "Starts a SEQUENCE of 2-3 real on-chain deals for a task with genuinely separate sequential phases handled by DIFFERENT specialists, where each phase can only begin once the prior phase's delivery proof exists on-chain (e.g. pick up an item, then repair it, then return it). Do not use this for a single-phase task, even a multi-step one a single specialist could handle — call start_deal instead.",
+        parameters: {
+          type: "object",
+          properties: {
+            legs: {
+              type: "array",
+              minItems: 2,
+              maxItems: 3,
+              items: {
+                type: "object",
+                properties: {
+                  category: {
+                    type: "string",
+                    enum: [...MANDATE_CATEGORIES],
+                    description: "Must be exactly one of the allowed Mandate categories.",
+                  },
+                  taskDescription: {
+                    type: "string",
+                    description: "This leg's own task, restated clearly enough for a specialist-matching search.",
+                  },
+                },
+                required: ["category", "taskDescription"],
+              },
+              description: "The ordered legs, in the order they must be performed.",
+            },
+          },
+          required: ["legs"],
         },
       },
     ],
@@ -69,9 +109,15 @@ export interface ChatMessage {
   attachment?: ChatAttachment;
 }
 
+export interface ChatChainLeg {
+  category: (typeof MANDATE_CATEGORIES)[number];
+  taskDescription: string;
+}
+
 export type ChatTurnResult =
   | { kind: "reply"; text: string }
-  | { kind: "start_deal"; task: string };
+  | { kind: "start_deal"; task: string }
+  | { kind: "start_deal_chain"; legs: ChatChainLeg[] };
 
 interface GeminiPart {
   text?: string;
@@ -129,6 +175,31 @@ export async function sendChatTurn(history: ChatMessage[]): Promise<ChatTurnResu
       throw new Error(`start_deal was called without a valid "task" argument: ${JSON.stringify(functionCall.args)}`);
     }
     return { kind: "start_deal", task };
+  }
+
+  if (functionCall?.name === "start_deal_chain") {
+    const rawLegs = functionCall.args?.legs;
+    if (!Array.isArray(rawLegs) || rawLegs.length < 2 || rawLegs.length > 3) {
+      throw new Error(`start_deal_chain was called with an invalid "legs" argument: ${JSON.stringify(functionCall.args)}`);
+    }
+    // Re-validate against MANDATE_CATEGORIES even though the tool schema
+    // already constrains it via `enum` — the schema is a hint to Gemini,
+    // not an enforced contract, same reasoning as interpretGoal's own
+    // hard clamp on maxBudget after asking nicely in the prompt.
+    const legs: ChatChainLeg[] = rawLegs.map((raw, i) => {
+      const category = (raw as Record<string, unknown>)?.category;
+      const taskDescription = (raw as Record<string, unknown>)?.taskDescription;
+      if (
+        typeof category !== "string" ||
+        !MANDATE_CATEGORIES.includes(category as (typeof MANDATE_CATEGORIES)[number]) ||
+        typeof taskDescription !== "string" ||
+        taskDescription.trim().length === 0
+      ) {
+        throw new Error(`start_deal_chain leg ${i} did not match the expected shape: ${JSON.stringify(raw)}`);
+      }
+      return { category: category as (typeof MANDATE_CATEGORIES)[number], taskDescription };
+    });
+    return { kind: "start_deal_chain", legs };
   }
 
   const text = parts.find((p) => p.text)?.text;
