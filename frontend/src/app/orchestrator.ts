@@ -61,15 +61,15 @@ export async function createDealAndEscrow(
   },
 ): Promise<void> {
   const steps: StatusStep[] = [
-    { id: "searching", state: "active", label: "Searching for candidates" },
-    { id: "candidate-found", state: "pending", label: "Candidate found" },
-    { id: "negotiating", state: "pending", label: "Negotiating terms" },
-    { id: "mandate-check", state: "pending", label: "Checking mandate" },
-    { id: "escrow-locked", state: "pending", label: "Escrow locked" },
-    { id: "work-in-progress", state: "pending", label: "Waiting for specialist" },
-    { id: "verification", state: "pending", label: "Verifying delivery" },
-    { id: "payment-released", state: "pending", label: "Payment released" },
-    { id: "reputation-updated", state: "pending", label: "Reputation updated" },
+    { id: "searching", state: "active", label: "Reading Mandate limits & searching the AgentRegistry", detail: "Reading the on-chain AgentRegistry for every specialist registered for this task's category." },
+    { id: "candidate-found", state: "pending", label: "Specialist selected by on-chain reputation" },
+    { id: "negotiating", state: "pending", label: "Proposing terms to the specialist" },
+    { id: "mandate-check", state: "pending", label: "Checking against Mandate spend limits on-chain" },
+    { id: "escrow-locked", state: "pending", label: "Locking payment in on-chain escrow" },
+    { id: "work-in-progress", state: "pending", label: "Waiting for the specialist to accept & deliver" },
+    { id: "verification", state: "pending", label: "Verifying delivery proof" },
+    { id: "payment-released", state: "pending", label: "Releasing payment on-chain" },
+    { id: "reputation-updated", state: "pending", label: "Updating on-chain reputation" },
   ];
 
   function emit() {
@@ -108,6 +108,8 @@ export async function createDealAndEscrow(
   const remainingAuthorizedMist = mandate.maxSpendMist - mandate.spentSoFarMist;
   const spendableMist = remainingAuthorizedMist < mandate.fundsMist ? remainingAuthorizedMist : mandate.fundsMist;
   const budgetCeilingSui = (Number(spendableMist) / 1_000_000_000) * 0.9;
+  const remainingAuthorizedSui = Number(remainingAuthorizedMist) / 1_000_000_000;
+  const fundedSui = Number(mandate.fundsMist) / 1_000_000_000;
 
   if (budgetCeilingSui < 0.001) {
     fail(
@@ -116,12 +118,18 @@ export async function createDealAndEscrow(
     );
   }
 
+  steps[0].detail = `Reading your Mandate's on-chain limits: authorized up to ${(Number(mandate.maxSpendMist) / 1_000_000_000).toFixed(4)} SUI total, ${(Number(mandate.spentSoFarMist) / 1_000_000_000).toFixed(4)} SUI already spent, ${remainingAuthorizedSui.toFixed(4)} SUI of authorization remaining. The Mandate is actually funded with ${fundedSui.toFixed(4)} SUI (the two limits are separate — see mandate.move — so this task's budget is capped at whichever is tighter, then held to ${budgetCeilingSui.toFixed(4)} SUI, a 10% safety margin under that cap).`;
+  emit();
+
   let interpreted;
   try {
     interpreted = await interpretGoal(goal, budgetCeilingSui);
   } catch (err) {
     fail(0, `Goal interpretation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+
+  steps[0].detail = `Asked Gemini to classify the task and propose a budget within that ${budgetCeilingSui.toFixed(4)} SUI ceiling. Result: category "${interpreted.category}", understood as "${interpreted.description}", proposed budget ${interpreted.maxBudget.toFixed(4)} SUI. Now querying the on-chain AgentRegistry for every specialist registered under "${interpreted.category}".`;
+  emit();
 
   // Any registered specialist for the category — no longer filtered to one
   // fixed demo address. Ranked by discoverAgents() itself (reputation
@@ -150,8 +158,9 @@ export async function createDealAndEscrow(
   // No scripted counterparty reply — the specialist's real assent happens
   // when they accept() in their own inbox, a separate signed transaction.
   steps[2].state = "done";
-  steps[2].detail = `Proposing ${interpreted.category} to ${candidate.suinsName} — payment held in escrow until they accept and deliver.`;
+  steps[2].detail = `Proposing "${interpreted.category}" to ${candidate.suinsName} at up to ${interpreted.maxBudget.toFixed(4)} SUI. Selected as the top-ranked candidate (reputation score ${candidate.reputationScore}) out of ${candidates.length} registered ${candidates.length === 1 ? "specialist" : "specialists"} for this category — no counter-offer negotiation happens here, the specialist either accepts this offer from their own inbox or it goes unaccepted. Payment stays locked in escrow the entire time and is only released after delivery is verified, so there's no exposure if they never respond.`;
   steps[3].state = "active";
+  steps[3].detail = `Confirming "${interpreted.category}" is one of this Mandate's allowed categories and ${interpreted.maxBudget.toFixed(4)} SUI is within its remaining spend cap — this check happens on-chain inside custodia::mandate::assert_within_mandate, not just client-side, so it can't be bypassed.`;
   emit();
   await wait(STEP_DELAY_MS);
 
@@ -169,8 +178,9 @@ export async function createDealAndEscrow(
   }
 
   steps[3].state = "done";
-  steps[3].detail = `Checking against Mandate ${mandateId}`;
+  steps[3].detail = `Passed — Mandate ${mandateId} allows "${interpreted.category}" and has enough remaining spend for ${interpreted.maxBudget.toFixed(4)} SUI. Envoy's own on-chain AgentIdentity (${envoyAgent.agentId}) is the signer for this Deal's client side — see the Mandate delegation model in this app's architecture notes.`;
   steps[4].state = "active";
+  steps[4].detail = `Building and signing the escrow transaction (custodia::deal::create_and_share) with a 24-hour delivery window and a 24-hour review window after that — real SUI moves from the Mandate's custody into this Deal's escrow now, not a simulation. It can only be released to ${candidate.suinsName} once delivery is verified, or refunded back to the Mandate if the deadline passes unaccepted.`;
   emit();
 
   let dealId: string;
@@ -198,9 +208,9 @@ export async function createDealAndEscrow(
   }
 
   steps[4].state = "done";
-  steps[4].detail = `Deal ${dealId} created and escrowed on-chain`;
+  steps[4].detail = `Deal ${dealId} created and escrowed on-chain — ${interpreted.maxBudget.toFixed(4)} SUI is now locked and can no longer be spent on anything else until this Deal resolves.`;
   steps[5].state = "active";
-  steps[5].detail = `Waiting for ${candidate.suinsName} to accept and deliver from their own inbox…`;
+  steps[5].detail = `${candidate.suinsName} can now see this offer in their own specialist inbox and accept it with their own wallet signature — Envoy has no control over when or whether they respond. If they don't accept and deliver within the 24-hour window, the escrow refunds automatically back to the Mandate.`;
   emit();
 
   // --- REAL PTB: create the Seal DealAllowlist for this Deal -----------
