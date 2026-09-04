@@ -99,10 +99,10 @@ must not be used in `frontend/src/`:
 ```
 VITE_SUI_NETWORK=testnet                # VERIFY: exact expected values
 
-# Deployed 2026-08-31 to Sui testnet by Person 1. These two are REAL values,
-# not placeholders — copy them as-is. See "Deployed addresses" below.
-VITE_CUSTODIA_PACKAGE_ID=0x881df0e7497084148538356c075a4d9e3640fac30afea1e2328aba28b33b8f71
-VITE_AGENT_REGISTRY_ID=0xf42821c47c23e96967bdc04b4265f38f7c92697bb966204205aff3a7d8e214e4
+# Deployed to Sui testnet (fresh publish, see "Deployed addresses" below
+# for why). These two are REAL values, not placeholders — copy as-is.
+VITE_CUSTODIA_PACKAGE_ID=0x8f9df445446cb4568136e6a0f6ef69c36d15ce869fca1185660bcd16a616a0e3
+VITE_AGENT_REGISTRY_ID=0x81ee790128d7a27b9712836b5400d98f3e04d42aa3376c7beded1c4bb857b473
 
 VITE_ENOKI_API_KEY=                     # VERIFY: exact env var name in Enoki docs
 VITE_WALRUS_PUBLISHER_URL=              # VERIFY: exact env var name / current publisher URL in Walrus docs
@@ -113,37 +113,66 @@ VITE_NAUTILUS_ENDPOINT=                 # VERIFY: exact env var name in Nautilus
 
 ## Deployed addresses (Sui testnet)
 
-Published 2026-08-31 (after implementing the Seal deal_access policy and SuiNS name verification; supersedes the rename-only publish `0xe44db9da…`, itself after the Custodia rename — the package name is part of every on-chain type string, so renaming forced a fresh package. `0x8e50044a…` and `0xa916af…` are both dead). Chain ID `4c78adac`. Also recorded in
-`move/Published.toml`, which the toolchain reads — do not hand-edit it.
+**Republished fresh** (not upgraded) after the original package's
+`UpgradeCap` key turned out to be unrecoverable — see the "why a fresh
+publish" note below. All prior on-chain `Deal`/`Mandate`/`AgentIdentity`
+objects from earlier testing were created under the OLD package
+(`0x881df0e7…`, now dead — do not use) and no longer show up in the app,
+which reads only from the package below. Chain ID `4c78adac`. Also
+recorded in `move/Published.toml`, which the toolchain reads — do not
+hand-edit it except as documented there.
 
 | What | Value |
 |---|---|
-| Package ID | `0x881df0e7497084148538356c075a4d9e3640fac30afea1e2328aba28b33b8f71` |
-| `AgentRegistry` (shared) | `0xf42821c47c23e96967bdc04b4265f38f7c92697bb966204205aff3a7d8e214e4` |
-| `UpgradeCap` | `0x0e28f571116349e281b2f0b3007d4084696fbfcf9d6133122e9ba83247623ec8` |
-| **Upgrade authority** (holds the cap) | `0x65547073f0f184ad64ad8146125f76d81de9b42ec3a9c2b551a7163eddf976f1` — CLI keystore (this publish; move to the wallet at the final build) |
-| Publisher (historical only) | `0x65547073f0f184ad64ad8146125f76d81de9b42ec3a9c2b551a7163eddf976f1` — CLI keystore |
-| Publish transaction | `BAXxG4aGpyGdyFQQNAvx7ZpGMErFcHXAK2DpJzeEEK6Q` |
+| Package ID | `0x8f9df445446cb4568136e6a0f6ef69c36d15ce869fca1185660bcd16a616a0e3` |
+| `AgentRegistry` (shared) | `0x81ee790128d7a27b9712836b5400d98f3e04d42aa3376c7beded1c4bb857b473` |
+| `UpgradeCap` | `0x43639f9c63873a3ca454d558b3e0c98ac66dbb402ff2e2ba355b950f886deb3d` |
+| **Upgrade authority** (holds the cap) | `0xed7eec15e6a9112fbf34e45347a853e2e602b6d703f49a37e17a9f93abc5d6fc` — CLI keystore |
+| Publish transaction | `52uc677bkdkD858wn6gtYkpmHWf8NQQE8nbHVjbL7Zdn` |
 
-The package was published from the CLI keystore address, then the `UpgradeCap`
-was transferred to Person 1's wallet. The publisher address is recorded in
-transaction history and cannot change, but it carries no ongoing authority —
-**whoever holds the `UpgradeCap` is the only party who can upgrade this
-package.** Upgrades must be signed by the wallet, not the CLI.
+### Why a fresh publish, not an upgrade
 
-Modules: `agent_identity`, `deal`, `deal_access`, `mandate`, `proof`, `reputation`.
-This package now depends on **suins-contracts, rev `testnet`** (a moving
+The prior deployment's `UpgradeCap` (`0x0e28f571…`) was owned by address
+`0x655470…`, documented at the time as "CLI keystore (this publish; move
+to the wallet at the final build)." That transfer to a real team wallet
+never happened, and the CLI keystore that generated `0x655470…` was not
+recoverable in a later session — most likely it existed only inside a
+disposable sandboxed environment from an earlier Claude Code session and
+was never backed up. `sui client upgrade` requires that key to sign, so
+upgrading in place was not possible. Rather than leave the app permanently
+stuck on an un-upgradeable package, it was republished fresh from a newly
+generated, actually-held CLI address (whose `UpgradeCap` is not going
+anywhere this time — **back this key up**, e.g. `sui keytool export`, to
+avoid repeating this).
+
+**Lesson for next time:** immediately after any `sui client publish`,
+export/back up the publishing address's key (or transfer the
+`UpgradeCap` to a wallet with a real, backed-up recovery phrase) before
+doing anything else — don't leave it sitting only in a CLI's default
+keystore, especially one running inside an ephemeral environment.
+
+Modules: `agent_identity`, `checkpoint`, `deal`, `deal_access`, `mandate`, `proof`, `reputation`.
+`checkpoint` is new — a granular, specialist-pushed status trail per Deal
+(e.g. "Picked up", "En route"), additive alongside `deal::DealStatus`'s
+own coarser 9-state enum; see `move/sources/checkpoint.move`'s header.
+
+This package depends on **suins-contracts, rev `testnet`** (a moving
 branch, not a pinned tag — a later `sui move build` could pull a different
 suins and would need re-verifying). It publishes only where SuiNS is deployed,
 so testnet works and localnet would not without SuiNS present.
 
-`deal_access` now implements the Seal allowlist policy (`seal_approve` +
-`check_policy`), verified against Seal's whitelist reference pattern. Person 3
-still owns the step-4-vs-step-6 keying design gap noted in the module.
+`deal_access` implements the Seal allowlist policy (`seal_approve` +
+`check_policy`), verified against Seal's whitelist reference pattern —
+also reused by `checkpoint` for a specialist's optional checkpoint
+photos, since the policy already scopes access to "either party on this
+deal" regardless of which encrypted artifact it is. Person 3 still owns
+the step-4-vs-step-6 keying design gap noted in `deal_access.move`.
 
-**If the package is ever upgraded**, keep BOTH IDs: struct types stay anchored
-to the original package ID, so type-based queries must use the original while
-`moveCall` targets use the newest. Today they are the same value.
+**If this package is ever upgraded**, keep BOTH IDs: struct types stay
+anchored to the original package ID, so type-based queries must use the
+original while `moveCall` targets use the newest. Today they are the
+same value (`VITE_CUSTODIA_ORIGINAL_PACKAGE_ID` is unset, defaulting to
+`VITE_CUSTODIA_PACKAGE_ID` — see `frontend/src/sui/config.ts`).
 
 ## Team & task ownership
 

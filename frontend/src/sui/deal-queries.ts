@@ -10,7 +10,7 @@
 
 import { SuiGraphQLClient } from "@mysten/sui/graphql";
 import { graphql } from "@mysten/sui/graphql/schema";
-import { PACKAGE_ID } from "./config";
+import { PACKAGE_ID, ORIGINAL_PACKAGE_ID } from "./config";
 import { ENVOY_ADDRESS } from "./envoy-signer";
 
 const GRAPHQL_URL = "https://graphql.testnet.sui.io/graphql";
@@ -141,7 +141,7 @@ export interface DealMetadata {
 export async function findDealMetadata(): Promise<Map<string, DealMetadata>> {
   const result = await client.query({
     query: GetDealCreatedEventsQuery,
-    variables: { type: `${PACKAGE_ID}::deal::DealCreated`, sender: ENVOY_ADDRESS },
+    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::DealCreated`, sender: ENVOY_ADDRESS },
   });
   if (result.errors?.length) {
     throw new Error(`DealCreated events query failed: ${JSON.stringify(result.errors)}`);
@@ -179,7 +179,7 @@ function readMistValue(raw: unknown): bigint {
 export async function findDealsForSpecialist(specialistAgentId: string): Promise<SpecialistDeal[]> {
   const result = await client.query({
     query: GetSharedDealsQuery,
-    variables: { type: `${PACKAGE_ID}::deal::Deal` },
+    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::Deal` },
   });
   if (result.errors?.length) {
     throw new Error(`Shared Deal query failed: ${JSON.stringify(result.errors)}`);
@@ -211,7 +211,7 @@ export async function findDealsForSpecialist(specialistAgentId: string): Promise
 export async function findDealsForClient(clientAgentId: string): Promise<SpecialistDeal[]> {
   const result = await client.query({
     query: GetSharedDealsQuery,
-    variables: { type: `${PACKAGE_ID}::deal::Deal` },
+    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::Deal` },
   });
   if (result.errors?.length) {
     throw new Error(`Shared Deal query failed: ${JSON.stringify(result.errors)}`);
@@ -240,7 +240,7 @@ export async function findDealsForClient(clientAgentId: string): Promise<Special
 export async function findDealById(dealId: string): Promise<SpecialistDeal | null> {
   const result = await client.query({
     query: GetSharedDealsQuery,
-    variables: { type: `${PACKAGE_ID}::deal::Deal` },
+    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::Deal` },
   });
   if (result.errors?.length) {
     throw new Error(`Shared Deal query failed: ${JSON.stringify(result.errors)}`);
@@ -298,9 +298,9 @@ export interface DealStageTimestamps {
  * (non-fabricated) source for "when did this stage actually happen." */
 export async function findDealStageTimestamps(dealId: string): Promise<DealStageTimestamps> {
   const [accepted, delivered, released] = await Promise.all([
-    client.query({ query: GetEventsByTypeQuery, variables: { type: `${PACKAGE_ID}::deal::DealAccepted` } }),
-    client.query({ query: GetEventsByTypeQuery, variables: { type: `${PACKAGE_ID}::deal::DealDelivered` } }),
-    client.query({ query: GetEventsByTypeQuery, variables: { type: `${PACKAGE_ID}::deal::DealReleased` } }),
+    client.query({ query: GetEventsByTypeQuery, variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::DealAccepted` } }),
+    client.query({ query: GetEventsByTypeQuery, variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::DealDelivered` } }),
+    client.query({ query: GetEventsByTypeQuery, variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::DealReleased` } }),
   ]);
   for (const result of [accepted, delivered, released]) {
     if (result.errors?.length) {
@@ -333,7 +333,7 @@ interface DealAllowlistJson {
 export async function findAllowlistForDeal(dealId: string): Promise<string | null> {
   const result = await client.query({
     query: GetSharedByTypeQuery,
-    variables: { type: `${PACKAGE_ID}::deal_access::DealAllowlist` },
+    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal_access::DealAllowlist` },
   });
   if (result.errors?.length) {
     throw new Error(`Shared DealAllowlist query failed: ${JSON.stringify(result.errors)}`);
@@ -395,7 +395,7 @@ function parseExtra(raw: number[] | string): { seedId: string; file?: DealProofI
 export async function findProofForDeal(dealId: string): Promise<DealProofInfo | null> {
   const result = await client.query({
     query: GetSharedByTypeQuery,
-    variables: { type: `${PACKAGE_ID}::proof::DealProof` },
+    variables: { type: `${ORIGINAL_PACKAGE_ID}::proof::DealProof` },
   });
   if (result.errors?.length) {
     throw new Error(`Shared DealProof query failed: ${JSON.stringify(result.errors)}`);
@@ -409,4 +409,61 @@ export async function findProofForDeal(dealId: string): Promise<DealProofInfo | 
     }
   }
   return null;
+}
+
+interface DealCheckpointJson {
+  deal_id: string;
+  label: string;
+  note: string;
+  photo_storage_id: string;
+  photo_seed_id: string;
+  created_by: string;
+  created_at_ms: string | number;
+}
+
+export interface DealCheckpointInfo {
+  checkpointId: string;
+  label: string;
+  note: string;
+  /** Empty string when the specialist attached no photo to this
+   * checkpoint. Seal-encrypted against the deal's existing DealAllowlist
+   * — same decrypt path as a DealProof file attachment, just referencing
+   * this checkpoint's own blobId/seedId instead. */
+  photo: { blobId: string; seedId: string } | null;
+  createdByAddress: string;
+  createdAtMs: number;
+}
+
+/** Finds every DealCheckpoint scoped to `dealId`, oldest first — the real
+ * granular status trail a specialist pushes (see move/sources/checkpoint.move),
+ * additive alongside Deal's own coarse status. checkpoint::DealCheckpoint
+ * is a type introduced BY the package upgrade that added checkpoint.move,
+ * so — unlike every other query in this file — this one correctly uses
+ * PACKAGE_ID (the latest/upgraded id), not ORIGINAL_PACKAGE_ID; see
+ * config.ts's header comment on why the two constants exist and diverge
+ * after an upgrade. */
+export async function findCheckpointsForDeal(dealId: string): Promise<DealCheckpointInfo[]> {
+  const result = await client.query({
+    query: GetSharedByTypeQuery,
+    variables: { type: `${PACKAGE_ID}::checkpoint::DealCheckpoint` },
+  });
+  if (result.errors?.length) {
+    throw new Error(`Shared DealCheckpoint query failed: ${JSON.stringify(result.errors)}`);
+  }
+  const nodes = result.data?.objects?.nodes ?? [];
+  const matches: DealCheckpointInfo[] = [];
+  for (const node of nodes) {
+    const json = node?.asMoveObject?.contents?.json as DealCheckpointJson | undefined;
+    if (node?.address && json?.deal_id === dealId) {
+      matches.push({
+        checkpointId: node.address,
+        label: json.label,
+        note: json.note,
+        photo: json.photo_storage_id ? { blobId: json.photo_storage_id, seedId: json.photo_seed_id } : null,
+        createdByAddress: json.created_by,
+        createdAtMs: Number(json.created_at_ms),
+      });
+    }
+  }
+  return matches.sort((a, b) => a.createdAtMs - b.createdAtMs);
 }
