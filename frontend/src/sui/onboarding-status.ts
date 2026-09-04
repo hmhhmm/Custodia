@@ -136,6 +136,65 @@ export async function findOwnedAgentIdentities(owner: string): Promise<(Register
   return found;
 }
 
+// Same multiGetObjects + Reputation.score batch-read pattern already
+// verified live in agent/discovery.ts's MultiGetReputationsQuery — kept
+// as a separate query here rather than importing that one, since
+// discovery.ts is scoped to ranking DISCOVERED candidates and this is
+// scoped to a wallet's OWN identities (a different call site, same
+// shared Reputation object type and read shape).
+const MultiGetReputationsQuery = graphql(`
+  query MultiGetOwnReputations($keys: [ObjectKey!]!) {
+    multiGetObjects(keys: $keys) {
+      address
+      asMoveObject {
+        contents {
+          json
+        }
+      }
+    }
+  }
+`);
+
+export interface ReputationInfo {
+  score: number;
+  completedDeals: number;
+  disputedDeals: number;
+}
+
+/** Batch-reads real on-chain Reputation.score/completed_deals/disputed_deals
+ * for a set of Reputation object ids — Reputation is a SHARED object
+ * (agent_identity::register_and_keep calls reputation.share()), so these
+ * are read directly by id, not scanned/filtered like an owned-object
+ * query. Returns a Map keyed by reputationId; ids with no match (e.g. a
+ * transient query hiccup) are simply absent, not zero-filled, so a
+ * caller can tell "not loaded yet" apart from "genuinely zero". */
+export async function findReputationScores(reputationIds: string[]): Promise<Map<string, ReputationInfo>> {
+  const map = new Map<string, ReputationInfo>();
+  if (reputationIds.length === 0) return map;
+
+  const result = await client.query({
+    query: MultiGetReputationsQuery,
+    variables: { keys: reputationIds.map((id) => ({ address: id })) },
+  });
+  if (result.errors?.length) {
+    throw new Error(`Reputation batch query failed: ${JSON.stringify(result.errors)}`);
+  }
+
+  for (const obj of result.data?.multiGetObjects ?? []) {
+    const json = obj?.asMoveObject?.contents?.json as
+      | { score?: number; completed_deals?: number; disputed_deals?: number }
+      | undefined;
+    if (obj?.address && typeof json?.score === "number") {
+      map.set(obj.address, {
+        score: json.score,
+        completedDeals: json.completed_deals ?? 0,
+        disputedDeals: json.disputed_deals ?? 0,
+      });
+    }
+  }
+  return map;
+}
+
 /** Finds an AgentIdentity owned by `owner` with the given capability tag
  * (e.g. "client" or "legal-review"). Returns the first match, or null if
  * none exists yet. */

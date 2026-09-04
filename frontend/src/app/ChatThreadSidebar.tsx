@@ -107,22 +107,49 @@ function ThreadRow({
   thread,
   active,
   onSelect,
+  onDelete,
 }: {
   thread: ThreadSummary;
   active: boolean;
   onSelect: () => void;
+  /** Undefined for General — it's the one always-present thread, deleting
+   * it doesn't make sense the way deleting a deal/chain thread does (and
+   * "New chat" already clears its content). Deleting a deal/chain thread
+   * only removes it from THIS device's local view — the underlying
+   * on-chain Deal(s), if any were escrowed, are permanent Sui objects and
+   * are completely unaffected; they still resolve normally through the
+   * real accept/deliver/release or timeout-refund path regardless of
+   * whether this local record of the conversation exists. */
+  onDelete?: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2.5 text-left transition-colors ${
+    <div
+      className={`group flex w-full items-center gap-1 rounded-lg text-left transition-colors ${
         active ? "bg-surface-hover text-vellum" : "text-manifest hover:bg-surface-hover hover:text-vellum"
       }`}
     >
-      <span className="line-clamp-1 w-full text-sm">{thread.title}</span>
-      {thread.statusLabel && <span className="text-xs text-manifest">{thread.statusLabel}</span>}
-    </button>
+      <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-3 py-2.5 text-left">
+        <span className="line-clamp-1 w-full text-sm">{thread.title}</span>
+        {thread.statusLabel && <span className="text-xs text-manifest">{thread.statusLabel}</span>}
+      </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Delete this chat"
+          aria-label="Delete this chat"
+          className="mr-1.5 shrink-0 rounded-md p-1.5 text-manifest opacity-0 transition-opacity hover:text-wax group-hover:opacity-100"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -132,6 +159,7 @@ export function ChatThreadSidebar({
   onSelectThread,
   onNewChat,
   onCollapse,
+  onDeleteThread,
 }: {
   turns: ConversationTurn[];
   activeThreadId: string;
@@ -141,6 +169,9 @@ export function ChatThreadSidebar({
    * the empty/collapsed states) — a real hide control, not just "it only
    * shows once a thread exists." */
   onCollapse: () => void;
+  /** Removes every turn for that threadId from local history — see
+   * ThreadRow's own comment on why this never touches on-chain state. */
+  onDeleteThread: (threadId: string) => void;
 }) {
   const threads = deriveThreads(turns);
 
@@ -178,6 +209,7 @@ export function ChatThreadSidebar({
               thread={thread}
               active={thread.threadId === activeThreadId}
               onSelect={() => onSelectThread(thread.threadId)}
+              onDelete={thread.threadId === GENERAL_THREAD_ID ? undefined : () => onDeleteThread(thread.threadId)}
             />
           ))}
         </div>

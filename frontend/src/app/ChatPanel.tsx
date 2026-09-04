@@ -221,6 +221,32 @@ export function ChatPanel({
     setPendingFile(null);
   }
 
+  // "New chat" previously only switched TO General — a no-op with no
+  // visible effect when already viewing General, which is exactly what
+  // made it look broken/unresponsive. Now it actually starts fresh: only
+  // General's own turns are cleared (deal threads are untouched — they're
+  // real on-chain history, not something a "new chat" click should ever
+  // discard), and the view is switched to General so the input is
+  // immediately ready for a genuinely new conversation.
+  function handleNewChat() {
+    onTurnsChange((prev) => prev.filter((t) => t.threadId !== GENERAL_THREAD_ID));
+    onSelectThread(GENERAL_THREAD_ID);
+  }
+
+  // Removes a thread from THIS device's local chat history only — see
+  // ChatThreadSidebar.tsx's ThreadRow comment on why any escrowed Deal
+  // behind it is completely unaffected (Sui objects are permanent; this
+  // is local UI state, same honesty convention as deal-local-meta.ts's
+  // hide feature). If the deleted thread was the one currently open,
+  // falls back to General so the view is never left pointing at a
+  // thread that no longer has any turns.
+  function handleDeleteThread(threadId: string) {
+    onTurnsChange((prev) => prev.filter((t) => t.threadId !== threadId));
+    if (activeThreadId === threadId) {
+      onSelectThread(GENERAL_THREAD_ID);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = input.trim();
@@ -248,7 +274,7 @@ export function ChatPanel({
     // after the fact, so there's no way to know the real thread up front.
     onTurnsChange((prev) => [
       ...prev,
-      { kind: "text", role: "user", text: sentText, attachment: turnAttachment, threadId: activeThreadId },
+      { kind: "text", id: crypto.randomUUID(), role: "user", text: sentText, attachment: turnAttachment, threadId: activeThreadId },
     ]);
     setBusy(true);
 
@@ -259,7 +285,10 @@ export function ChatPanel({
       ]);
 
       if (result.kind === "reply") {
-        onTurnsChange((prev) => [...prev, { kind: "text", role: "assistant", text: result.text, threadId: activeThreadId }]);
+        onTurnsChange((prev) => [
+          ...prev,
+          { kind: "text", id: crypto.randomUUID(), role: "assistant", text: result.text, threadId: activeThreadId },
+        ]);
         setBusy(false);
         return;
       }
@@ -309,6 +338,7 @@ export function ChatPanel({
             ...prev,
             {
               kind: "text",
+              id: crypto.randomUUID(),
               role: "assistant",
               text: `That didn't go through: ${err instanceof Error ? err.message : String(err)}`,
               threadId: dealId,
@@ -363,6 +393,7 @@ export function ChatPanel({
           ...prev,
           {
             kind: "text",
+            id: crypto.randomUUID(),
             role: "assistant",
             text: `That didn't go through: ${err instanceof Error ? err.message : String(err)}`,
             threadId: chainId,
@@ -373,7 +404,7 @@ export function ChatPanel({
     } catch (err) {
       onTurnsChange((prev) => [
         ...prev,
-        { kind: "error", text: err instanceof Error ? err.message : String(err), threadId: activeThreadId },
+        { kind: "error", id: crypto.randomUUID(), text: err instanceof Error ? err.message : String(err), threadId: activeThreadId },
       ]);
       setBusy(false);
     }
@@ -482,8 +513,9 @@ export function ChatPanel({
           turns={turns}
           activeThreadId={activeThreadId}
           onSelectThread={onSelectThread}
-          onNewChat={() => onSelectThread(GENERAL_THREAD_ID)}
+          onNewChat={handleNewChat}
           onCollapse={() => setSidebarHidden(true)}
+          onDeleteThread={handleDeleteThread}
         />
       )}
       <LayoutGroup>
@@ -519,7 +551,7 @@ export function ChatPanel({
                   <div className="flex flex-col gap-5 py-6">
                     {threadTurns.map((turn, i) => (
                       <motion.div
-                        key={i}
+                        key={turn.id}
                         layout
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -547,16 +579,37 @@ export function ChatPanel({
                               // Only the LATEST leg of its chain should ever
                               // poll to advance the chain — otherwise every
                               // resolved earlier leg would independently
-                              // try to create the next one too, racing
-                              // itself. "Latest" is computed here (where
-                              // the full turns array is in scope) rather
-                              // than inside DealProgress, so a duplicate
-                              // advance is structurally prevented rather
-                              // than merely debounced.
+                              // try to create the next one too. This is a
+                              // presentational hint only, NOT the real
+                              // race guard — a plain boolean derived from
+                              // `turns` can't reliably be one, since every
+                              // mounted component instance (including
+                              // stale/duplicate ones) recomputes it
+                              // independently with no shared "someone's
+                              // already doing this" signal between them.
+                              // The actual guard against duplicate advance
+                              // is chainAdvance.ts's chainsCurrentlyAdvancing
+                              // module-level lock, held for a chain's
+                              // entire advance regardless of which/how many
+                              // component instances call in — that's what
+                              // makes it now SAFE for this hint to be
+                              // permissive: a later leg only counts as
+                              // "the chain has moved on" once it actually
+                              // escrowed (pending set), not merely exists
+                              // as a turn, so a dead/failed duplicate leg
+                              // (e.g. from the exact race the lock now
+                              // prevents) can never permanently block the
+                              // real leg from polling and retrying again —
+                              // the lock, not this heuristic, is what
+                              // stops that retry from ALSO racing.
                               isLatestUnadvancedLeg={
                                 !!turn.chain &&
                                 !turns.some(
-                                  (t) => t.kind === "deal" && t.chain?.chainId === turn.chain!.chainId && t.chain.legIndex > turn.chain!.legIndex,
+                                  (t) =>
+                                    t.kind === "deal" &&
+                                    t.chain?.chainId === turn.chain!.chainId &&
+                                    t.chain.legIndex > turn.chain!.legIndex &&
+                                    t.pending !== null,
                                 )
                               }
                               connectedAddress={connectedAddress}
@@ -631,15 +684,25 @@ function liveStatusDetail(status: DealStatusName, pending: PendingRelease): stri
   }
 }
 
-/** Small label above a DealProgress card that's one leg of a multi-agent
- * chain — "Part 2 of 3 · repair the laptop" — so the reader immediately
- * understands this is one step of a larger sequence, not a standalone
- * deal. Purely presentational; rendered only when turn.chain is set. */
+/** A clear divider marking the handoff into one leg of a multi-agent
+ * chain — deliberately more prominent than a small label, since a leg's
+ * full step-by-step log (searching, negotiating, escrow...) appearing
+ * right after the previous leg's card otherwise reads as noise piling up
+ * rather than a deliberate "now starting the next step" moment. Only the
+ * FIRST leg (index 0) skips this — that one is the direct result of the
+ * user's own message, not a handoff from anything prior. */
 function ChainLegHeader({ legIndex, legTotal, task }: { legIndex: number; legTotal: number; task: string }) {
+  if (legIndex === 0) {
+    return <p className="mb-1.5 text-xs uppercase tracking-wide text-manifest">Part 1 of {legTotal} · {task}</p>;
+  }
   return (
-    <p className="mb-1.5 text-xs uppercase tracking-wide text-manifest">
-      Part {legIndex + 1} of {legTotal} · {task}
-    </p>
+    <div className="mb-3 mt-1 flex items-center gap-3">
+      <span className="h-px flex-1 bg-border" />
+      <p className="shrink-0 text-xs uppercase tracking-wide text-manifest">
+        Part {legIndex + 1} of {legTotal} — starting next step
+      </p>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 
@@ -740,7 +803,9 @@ function DealProgress({
 
     async function poll() {
       try {
+        console.log("[DealProgress] polling", { dealId: effectivePending!.dealId, chain, isLatestUnadvancedLeg });
         const deal = await findDealById(effectivePending!.dealId);
+        console.log("[DealProgress] poll result", { dealId: effectivePending!.dealId, status: deal?.status });
         if (!cancelled && deal) setLiveStatus(deal.status);
       } catch (err) {
         // Transient GraphQL hiccup — next poll tick will retry. Logged
@@ -806,14 +871,32 @@ function DealProgress({
   // principle as reconstructPendingRelease and the self-heal effect
   // above — so a page refresh mid-chain cannot strand it.
   useEffect(() => {
-    if (!chain || !isLatestUnadvancedLeg || !effectivePending) return;
+    console.log("[chainAdvance] gate check", { chain, isLatestUnadvancedLeg, effectivePending });
+    if (!chain || chain.ended || !isLatestUnadvancedLeg || !effectivePending) return;
     let cancelled = false;
+    // A single call to tryAdvanceChain involves several sequential async
+    // steps (decrypt proof, a real Gemini summarization call, then a
+    // full build-sign-wait escrow transaction for the next leg) that can
+    // easily take longer than POLL_INTERVAL_MS combined. Without this
+    // guard, setInterval fires the NEXT poll tick before the first one
+    // has appended the new leg turn to `turns` — both ticks see the same
+    // stale "no next leg yet" state and both think they're the one that
+    // should create it, producing two duplicate leg turns (the exact bug
+    // reported: "Part 2 of 3" appearing twice). isLatestUnadvancedLeg
+    // alone can't prevent this — it's computed from `turns`, which
+    // doesn't change until the FIRST call's onTurnsChange actually runs.
+    let inFlight = false;
 
     async function poll() {
+      if (inFlight) return;
+      inFlight = true;
       try {
+        console.log("[chainAdvance] polling tryAdvanceChain for", effectivePending!.dealId);
         await tryAdvanceChain({ task, threadId, pending: effectivePending!, chain: chain! }, connectedAddress, onboarding, onTurnsChange);
       } catch (err) {
         if (!cancelled) console.error("DealProgress chain-advance failed for", effectivePending!.dealId, err);
+      } finally {
+        inFlight = false;
       }
     }
 
@@ -873,6 +956,16 @@ function DealProgress({
   const allStepsDone = displaySteps.length > 0 && displaySteps.every((s) => s.state === "done");
   const allDone = allStepsDone && (Boolean(receipt) || effectiveLiveStatus === "Released" || effectiveLiveStatus === "Settled");
 
+  // Once a chain has moved past this leg (a later leg now exists), this
+  // card is no longer the "current" thing happening — collapsing it is
+  // what actually makes a leg transition read as a clear handoff instead
+  // of every leg's full step-by-step log just piling up on screen at
+  // once. Collapses immediately (no allDone requirement, no delay) the
+  // moment isLatestUnadvancedLeg goes false, since by definition that only
+  // happens after this leg's own proof already existed — there's nothing
+  // further for the user to watch happen here.
+  const supersededByLaterLeg = chain !== null && !isLatestUnadvancedLeg;
+
   useEffect(() => {
     if (allDone && !autoCollapsed) {
       const timer = setTimeout(() => {
@@ -882,6 +975,13 @@ function DealProgress({
       return () => clearTimeout(timer);
     }
   }, [allDone, autoCollapsed]);
+
+  useEffect(() => {
+    if (supersededByLaterLeg) {
+      setExpanded(false);
+      setAutoCollapsed(true);
+    }
+  }, [supersededByLaterLeg]);
 
   async function handleRelease() {
     if (!effectivePending) return;
@@ -913,9 +1013,13 @@ function DealProgress({
         className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-surface-hover"
       >
         {!allDone && !failed && (
-          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-vellum" aria-hidden="true" />
+          <span
+            className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-manifest border-t-vellum"
+            role="status"
+            aria-label="In progress"
+          />
         )}
-        {allDone && <span className="shrink-0 text-emerald-500">✓</span>}
+        {allDone && <span className="shrink-0 text-vellum">✓</span>}
         {failed && <span className="shrink-0 text-red-500">✕</span>}
         <span className="min-w-0 flex-1 truncate text-sm text-vellum">{summary}</span>
         <span className={`shrink-0 text-manifest transition-transform ${expanded ? "rotate-180" : ""}`}>⌄</span>
@@ -944,6 +1048,34 @@ function DealProgress({
                     {releasing ? "Releasing…" : "Verify & Release Payment"}
                   </button>
                   {releaseError && <p className="mt-2 text-sm text-wax">{releaseError}</p>}
+                </div>
+              )}
+
+              {chain && !chain.ended && !allDone && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onTurnsChange((prev) =>
+                        prev.map((t) =>
+                          t.kind === "deal" && t.chain?.chainId === chain.chainId ? { ...t, chain: { ...t.chain, ended: true } } : t,
+                        ),
+                      );
+                    }}
+                    className="rounded-md border border-border px-3 py-1.5 text-xs text-manifest transition-colors hover:border-white/30 hover:text-vellum"
+                  >
+                    End session
+                  </button>
+                  <p className="mt-1.5 text-xs text-manifest">
+                    Stops this chain from creating any further legs. Any deal already escrowed on-chain is untouched — it still resolves
+                    normally (accept/deliver/release, or refunds automatically if the specialist never responds).
+                  </p>
+                </div>
+              )}
+
+              {chain?.ended && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <p className="text-xs text-manifest">Session ended — this chain will not create any further legs.</p>
                 </div>
               )}
             </div>

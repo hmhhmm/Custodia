@@ -42,7 +42,7 @@ import { interpretGoal } from "../agent/llm";
 import { buildLockEscrowAndCreateDealTx, extractDealIdFromResult } from "../sui/ptb-escrow";
 import { buildCreateDealAllowlistTx, extractAllowlistIdFromEffects } from "../sui/ptb-deal-access";
 import { findOwnedAgentIdentity, findMandateDetails } from "../sui/onboarding-status";
-import type { OnboardingResult } from "./Onboarding";
+import { MANDATE_CATEGORIES, type OnboardingResult } from "./Onboarding";
 import type { PendingRelease, StatusStep } from "./types";
 
 function wait(ms: number): Promise<void> {
@@ -59,6 +59,15 @@ export async function createDealAndEscrow(
     onStepsChange: (steps: StatusStep[]) => void;
     onEscrowed: (pending: PendingRelease) => void;
   },
+  // Set for one leg of a multi-agent chain, where the category was
+  // ALREADY decided by start_deal_chain (chat.ts) — see llm.ts's
+  // interpretGoal forcedCategory param for why this must be threaded
+  // through rather than re-derived: a leg's free-text taskDescription
+  // being independently re-classified here could land on (and this
+  // session genuinely did land on) a DIFFERENT category than the one
+  // the chain actually escrowed against, matching the wrong specialist
+  // type entirely.
+  forcedCategory?: string,
 ): Promise<void> {
   const steps: StatusStep[] = [
     { id: "searching", state: "active", label: "Reading Mandate limits & searching the AgentRegistry", detail: "Reading the on-chain AgentRegistry for every specialist registered for this task's category." },
@@ -123,12 +132,18 @@ export async function createDealAndEscrow(
 
   let interpreted;
   try {
-    interpreted = await interpretGoal(goal, budgetCeilingSui);
+    interpreted = await interpretGoal(
+      goal,
+      budgetCeilingSui,
+      forcedCategory as (typeof MANDATE_CATEGORIES)[number] | undefined,
+    );
   } catch (err) {
     fail(0, `Goal interpretation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  steps[0].detail = `Asked Gemini to classify the task and propose a budget within that ${budgetCeilingSui.toFixed(4)} SUI ceiling. Result: category "${interpreted.category}", understood as "${interpreted.description}", proposed budget ${interpreted.maxBudget.toFixed(4)} SUI. Now querying the on-chain AgentRegistry for every specialist registered under "${interpreted.category}".`;
+  steps[0].detail = forcedCategory
+    ? `Category already decided by the chain plan: "${interpreted.category}". Asked Gemini for a budget within that ${budgetCeilingSui.toFixed(4)} SUI ceiling — proposed ${interpreted.maxBudget.toFixed(4)} SUI. Now querying the on-chain AgentRegistry for every specialist registered under "${interpreted.category}".`
+    : `Asked Gemini to classify the task and propose a budget within that ${budgetCeilingSui.toFixed(4)} SUI ceiling. Result: category "${interpreted.category}", understood as "${interpreted.description}", proposed budget ${interpreted.maxBudget.toFixed(4)} SUI. Now querying the on-chain AgentRegistry for every specialist registered under "${interpreted.category}".`;
   emit();
 
   // Any registered specialist for the category — no longer filtered to one
@@ -277,5 +292,5 @@ export async function createDealChain(
     onEscrowed: (pending: PendingRelease) => void;
   },
 ): Promise<void> {
-  await createDealAndEscrow(legs[0].taskDescription, connectedAddress, onboarding, handlers);
+  await createDealAndEscrow(legs[0].taskDescription, connectedAddress, onboarding, handlers, legs[0].category);
 }
