@@ -18,7 +18,14 @@
 import { useEffect, useState } from "react";
 import type { ConversationTurn, DealReceipt, PendingRelease } from "./types";
 import { StatusFeed } from "./StatusFeed";
-import { findDealById, findDealMetadata, type DealStatusName, type DealMetadata } from "../sui/deal-queries";
+import {
+  findDealById,
+  findDealMetadata,
+  findDealStageTimestamps,
+  type DealStatusName,
+  type DealMetadata,
+  type DealStageTimestamps,
+} from "../sui/deal-queries";
 import { releaseDeal, reconstructPendingRelease } from "./release";
 import { summarizeDealTitle } from "../agent/llm";
 import {
@@ -175,10 +182,42 @@ function CopyableAddress({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Real (not fabricated) per-stage time — pulled from the checkpoint
+ * timestamp of the DealCreated/DealAccepted/DealDelivered/DealReleased
+ * event carrying this dealId. See findDealStageTimestamps's own comment:
+ * Deal itself stores no stage history, only a forward-looking, overwritten
+ * stage_deadline_ms — this is the only real source for "when." */
+function stageTimestamp(
+  stage: DealStatusName,
+  createdAtMs: number | null | undefined,
+  stageTimes: DealStageTimestamps | null,
+): number | null {
+  switch (stage) {
+    case "Escrowed":
+      return createdAtMs ?? null;
+    case "Accepted":
+      return stageTimes?.acceptedAtMs ?? null;
+    case "Delivered":
+      return stageTimes?.deliveredAtMs ?? null;
+    case "Released":
+      return stageTimes?.releasedAtMs ?? null;
+    default:
+      return null;
+  }
+}
+
 /** Status timeline — a real progression readout (not just the current
  * status alone), so the page communicates the deal's full history at a
  * glance the way a professional order-tracking page would. */
-function Timeline({ status }: { status: DealStatusName }) {
+function Timeline({
+  status,
+  createdAtMs,
+  stageTimes,
+}: {
+  status: DealStatusName;
+  createdAtMs: number | null | undefined;
+  stageTimes: DealStageTimestamps | null;
+}) {
   const currentRank = statusRank(status);
   const isDisputeLike = status === "Disputed" || status === "Refunded";
 
@@ -189,6 +228,7 @@ function Timeline({ status }: { status: DealStatusName }) {
         const done = !isDisputeLike && currentRank >= stageRank;
         const active = !isDisputeLike && currentRank === stageRank - 1;
         const isLast = i === TIMELINE_STAGES.length - 1;
+        const ts = done ? stageTimestamp(stage.status, createdAtMs, stageTimes) : null;
         return (
           <div key={stage.status} className="flex gap-3">
             <div className="flex flex-col items-center">
@@ -205,7 +245,10 @@ function Timeline({ status }: { status: DealStatusName }) {
               </span>
               {!isLast && <span className={`w-px flex-1 ${done ? "bg-emerald-500/40" : "bg-border"}`} style={{ minHeight: "1.5rem" }} />}
             </div>
-            <p className={`pb-6 text-sm ${done || active ? "text-vellum" : "text-manifest"}`}>{stage.label}</p>
+            <div className="flex flex-1 items-baseline justify-between gap-3 pb-6">
+              <p className={`text-sm ${done || active ? "text-vellum" : "text-manifest"}`}>{stage.label}</p>
+              {ts && <p className="shrink-0 text-xs text-manifest">{formatDateTime(ts)}</p>}
+            </div>
           </div>
         );
       })}
@@ -238,6 +281,7 @@ export function ProgressView({
   const [pending, setPending] = useState<PendingRelease | "loading" | null>(turn?.pending ?? "loading");
   const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
   const [metadata, setMetadata] = useState<DealMetadata | null>(null);
+  const [stageTimes, setStageTimes] = useState<DealStageTimestamps | null>(null);
   const [title, setTitle] = useState<string | null>(() => getCachedDealTitle(dealId));
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
@@ -298,6 +342,29 @@ export function ProgressView({
     };
   }, [dealId, alreadyReleased]);
 
+  // Stage timestamps only exist once a stage has actually happened on-chain
+  // — re-poll alongside status so a freshly-Accepted/Delivered/Released
+  // deal picks up its new timestamp without needing a manual refresh.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const times = await findDealStageTimestamps(dealId);
+        if (!cancelled) setStageTimes(times);
+      } catch {
+        // Transient GraphQL hiccup — next poll tick will retry.
+      }
+    }
+
+    poll();
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [dealId]);
+
   useEffect(() => {
     if (title !== null || (pending === "loading" && !metadata)) return;
     const amount = pending && pending !== "loading" ? pending.amountSui : 0;
@@ -327,7 +394,10 @@ export function ProgressView({
   }
 
   const displayStatus = alreadyReleased ? "Released" : liveStatus;
-  const amountSui = pending && pending !== "loading" ? pending.amountSui : null;
+  // The ORIGINAL amount, from the DealCreated event via metadata — not
+  // Deal.escrowed_amount (which correctly reads 0 once release has paid
+  // it out, and was wrongly shown as "0 SUI paid" before this fix).
+  const amountSui = metadata ? Number(metadata.amountMist) / 1_000_000_000 : null;
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
@@ -392,12 +462,12 @@ export function ProgressView({
         </div>
       )}
 
-      {!alreadyReleased && liveStatus && (
+      {displayStatus && (
         <div className="mt-6 rounded-xl border border-border bg-surface p-6">
           <p className="mb-5 text-sm font-medium text-vellum">Status timeline</p>
-          <Timeline status={liveStatus} />
+          <Timeline status={displayStatus} createdAtMs={metadata?.createdAtMs} stageTimes={stageTimes} />
 
-          {liveStatus === "Delivered" && (
+          {!alreadyReleased && liveStatus === "Delivered" && (
             <div className="border-t border-border pt-5">
               <p className="text-sm text-manifest">Delivered — ready to verify and release payment.</p>
               <button
