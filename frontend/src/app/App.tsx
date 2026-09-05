@@ -11,11 +11,12 @@ import { useCurrentAccount, useWalletConnection } from "@mysten/dapp-kit-react";
 import { AppShell, type NavItem } from "./components/AppShell";
 import { Landing } from "./Landing";
 import { Onboarding, type OnboardingResult } from "./Onboarding";
-import { Dashboard } from "./Dashboard";
+import { Dashboard, type ChainDetailLeg } from "./Dashboard";
 import { MandateView } from "./MandateView";
 import { SpecialistOnboarding } from "./SpecialistOnboarding";
 import { ChatPanel } from "./ChatPanel";
 import { ProgressView } from "./ProgressView";
+import { ChainDetailView } from "./ChainDetailView";
 import { StepList } from "./StatusFeed";
 import { Receipt } from "./Receipt";
 import { findOwnedMandate } from "../sui/onboarding-status";
@@ -24,7 +25,7 @@ import { loadChatHistory, saveChatHistory } from "./chat-local-history";
 import type { ConversationTurn, DealReceipt } from "./types";
 import { GENERAL_THREAD_ID } from "./types";
 
-type Screen = "checking" | "onboarding" | "app" | "receipt";
+type Screen = "checking" | "onboarding" | "app";
 
 function ScreenTransition({ children }: { children: React.ReactNode }) {
   return (
@@ -49,6 +50,13 @@ export function App() {
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const [viewingDealId, setViewingDealId] = useState<string | null>(null);
   const [viewingChainDealId, setViewingChainDealId] = useState<string | null>(null);
+  // Set when the user opens a WHOLE chain group card (not one leg) —
+  // ChainDetailView stacks every leg on one page, instead of a click
+  // landing on one leg's own separate, unrelated-looking ProgressView.
+  // Dashboard already computed the ordered leg list (it's the one with
+  // the grouping logic), so it's handed over directly rather than
+  // re-derived here from a bare chainId.
+  const [viewingChainLegs, setViewingChainLegs] = useState<ChainDetailLeg[] | null>(null);
   const [receipt, setReceipt] = useState<DealReceipt | null>(null);
   const [onboarding, setOnboarding] = useState<OnboardingResult | null>(null);
   // Which chat thread is open — GENERAL_THREAD_ID or a deal's own id. See
@@ -108,8 +116,12 @@ export function App() {
   }, [account, turns, historyLoadedFor]);
 
   function handleDealComplete(finalReceipt: DealReceipt) {
+    // A pop-out card over whatever screen is already showing (usually
+    // Chat, mid-conversation) — NOT a full-screen navigation. Releasing
+    // payment used to force-switch `screen` to a dedicated "receipt"
+    // page, which yanked the user out of Chat entirely; see the overlay
+    // rendered at the bottom of this component instead.
     setReceipt(finalReceipt);
-    setScreen("receipt");
   }
 
   function handleOpenDeal(dealTurnId: string) {
@@ -120,14 +132,23 @@ export function App() {
     setViewingChainDealId(dealId);
   }
 
+  function handleOpenChain(legs: ChainDetailLeg[]) {
+    setViewingChainLegs(legs);
+  }
+
   function handleBackToDeals() {
     // The "Completed" list is chain-derived (Dashboard re-fetches from
     // findDealsForClient on mount) — nothing to append manually here
     // anymore, the just-released deal will simply show up with status
     // Released next time Dashboard reads chain.
     setReceipt(null);
-    setScreen("app");
     setNav("deals");
+  }
+
+  /** Dismisses the receipt card without navigating anywhere — the user
+   * stays exactly where they were (e.g. mid-conversation in Chat). */
+  function handleCloseReceipt() {
+    setReceipt(null);
   }
 
   if (status === "reconnecting") {
@@ -164,19 +185,12 @@ export function App() {
     );
   }
 
-  if (screen === "receipt" && receipt) {
-    return (
-      <div className="min-h-screen bg-ink px-4 py-8 sm:px-6 sm:py-10">
-        <Receipt receipt={receipt} onBackToDeals={handleBackToDeals} />
-      </div>
-    );
-  }
-
   const viewingDeal = turns.find((t): t is Extract<ConversationTurn, { kind: "deal" }> => t.kind === "deal" && t.id === viewingDealId);
 
   function handleNavChange(next: NavItem) {
     setViewingDealId(null);
     setViewingChainDealId(null);
+    setViewingChainLegs(null);
     setNav(next);
   }
 
@@ -212,6 +226,7 @@ export function App() {
   }
 
   return (
+    <>
     <AppShell activeNav={nav} onNavChange={handleNavChange} address={account.address}>
       <AnimatePresence mode="wait">
         {nav === "chat" && onboarding && (
@@ -228,7 +243,26 @@ export function App() {
             />
           </ScreenTransition>
         )}
-        {nav === "deals" && viewingDealIdResolved && (
+        {nav === "deals" && viewingChainLegs && (
+          <ScreenTransition key="chain-detail">
+            <ChainDetailView
+              legs={viewingChainLegs}
+              onBack={() => setViewingChainLegs(null)}
+              onReturnToChat={() => handleReturnToChat(resolveThreadIdForDeal(viewingChainLegs[0]?.dealId ?? null))}
+              onReleased={(finalReceipt) => {
+                setTurns((prev) =>
+                  prev.map((t) =>
+                    t.kind === "deal" && viewingChainLegs.some((l) => l.dealId === t.pending?.dealId)
+                      ? { ...t, receipt: finalReceipt }
+                      : t,
+                  ),
+                );
+                handleDealComplete(finalReceipt);
+              }}
+            />
+          </ScreenTransition>
+        )}
+        {nav === "deals" && !viewingChainLegs && viewingDealIdResolved && (
           <ScreenTransition key="progress">
             <ProgressView
               dealId={viewingDealIdResolved}
@@ -260,7 +294,7 @@ export function App() {
             />
           </ScreenTransition>
         )}
-        {nav === "deals" && !viewingDealIdResolved && viewingPreEscrowTurn && (
+        {nav === "deals" && !viewingChainLegs && !viewingDealIdResolved && viewingPreEscrowTurn && (
           <ScreenTransition key="pre-escrow">
             <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
               <button
@@ -276,13 +310,14 @@ export function App() {
             </div>
           </ScreenTransition>
         )}
-        {nav === "deals" && !viewingDealIdResolved && !viewingPreEscrowTurn && (
+        {nav === "deals" && !viewingChainLegs && !viewingDealIdResolved && !viewingPreEscrowTurn && (
           <ScreenTransition key="deals">
             <Dashboard
               turns={turns}
               onNewDeal={() => handleReturnToChat(GENERAL_THREAD_ID)}
               onOpenDeal={handleOpenDeal}
               onOpenChainDeal={handleOpenChainDeal}
+              onOpenChain={handleOpenChain}
               onReturnToChat={handleReturnToChat}
             />
           </ScreenTransition>
@@ -299,6 +334,32 @@ export function App() {
         )}
       </AnimatePresence>
     </AppShell>
+    <AnimatePresence>
+      {receipt && (
+        <motion.div
+          key="receipt-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15, ease: "easeOut" }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseReceipt();
+          }}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.98 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-border bg-ink px-6 py-2 shadow-2xl"
+          >
+            <Receipt receipt={receipt} onBackToDeals={handleBackToDeals} onClose={handleCloseReceipt} />
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+    </>
   );
 }
 

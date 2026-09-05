@@ -23,14 +23,18 @@ const client = new SuiGraphQLClient({ url: GRAPHQL_URL, network: "testnet" });
 // lives right on the node, there's no `asMoveObject` wrapper like the
 // `object(address:)` single-entity query uses (see discovery.ts).
 const GetOwnedAgentIdentitiesQuery = graphql(`
-  query GetOwnedAgentIdentities($owner: SuiAddress!, $type: String!) {
+  query GetOwnedAgentIdentities($owner: SuiAddress!, $type: String!, $after: String) {
     address(address: $owner) {
-      objects(filter: { type: $type }) {
+      objects(filter: { type: $type }, after: $after) {
         nodes {
           address
           contents {
             json
           }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
         }
       }
     }
@@ -49,8 +53,8 @@ const GetOwnedAgentIdentitiesQuery = graphql(`
 // asMoveObject), unlike Address.objects above which yields MoveObject
 // directly — same distinction discovery.ts already deals with.
 const GetSharedMandatesQuery = graphql(`
-  query GetSharedMandates($type: String!) {
-    objects(filter: { type: $type, ownerKind: SHARED }) {
+  query GetSharedMandates($type: String!, $after: String) {
+    objects(filter: { type: $type, ownerKind: SHARED }, after: $after) {
       nodes {
         address
         asMoveObject {
@@ -58,6 +62,10 @@ const GetSharedMandatesQuery = graphql(`
             json
           }
         }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
@@ -117,21 +125,36 @@ function readMistValue(raw: unknown): bigint {
 /** Finds every AgentIdentity owned by `owner` — there is no registry index
  * by owner, so this scans the (small, per-wallet) set of AgentIdentity
  * objects directly. */
-export async function findOwnedAgentIdentities(owner: string): Promise<(RegisteredAgent & { capabilities: string[] })[]> {
+type OwnedAgentIdentityPage = {
+  nodes: { address?: string | null; contents?: { json?: unknown } | null }[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+};
+
+async function fetchOwnedAgentIdentitiesPage(owner: string, after: string | null): Promise<OwnedAgentIdentityPage | undefined> {
   const result = await client.query({
     query: GetOwnedAgentIdentitiesQuery,
-    variables: { owner, type: `${PACKAGE_ID}::agent_identity::AgentIdentity` },
+    variables: { owner, type: `${PACKAGE_ID}::agent_identity::AgentIdentity`, after },
   });
   if (result.errors?.length) {
     throw new Error(`Owned AgentIdentity query failed: ${JSON.stringify(result.errors)}`);
   }
-  const nodes = result.data?.address?.objects?.nodes ?? [];
+  return result.data?.address?.objects ?? undefined;
+}
+
+export async function findOwnedAgentIdentities(owner: string): Promise<(RegisteredAgent & { capabilities: string[] })[]> {
   const found: (RegisteredAgent & { capabilities: string[] })[] = [];
-  for (const node of nodes) {
-    const json = node?.contents?.json as AgentIdentityJson | undefined;
-    if (node?.address && json) {
-      found.push({ agentId: node.address, reputationId: json.reputation_id, capabilities: json.capabilities });
+  let hasNextPage = true;
+  let after: string | null = null;
+  while (hasNextPage) {
+    const page = await fetchOwnedAgentIdentitiesPage(owner, after);
+    for (const node of page?.nodes ?? []) {
+      const json = node?.contents?.json as AgentIdentityJson | undefined;
+      if (node?.address && json) {
+        found.push({ agentId: node.address, reputationId: json.reputation_id, capabilities: json.capabilities });
+      }
     }
+    hasNextPage = page?.pageInfo?.hasNextPage ?? false;
+    after = page?.pageInfo?.endCursor ?? null;
   }
   return found;
 }
@@ -215,30 +238,42 @@ export async function findOwnedAgentIdentity(
  * is no owner-indexed query for shared objects (see GetSharedMandatesQuery
  * above). Fine at hackathon scale; would need a real indexer (see the
  * accessing-data skill) if the Mandate count ever grows large. */
-export async function findAllMandateDetails(owner: string, delegate: string): Promise<MandateDetails[]> {
-  const result = await client.query({
-    query: GetSharedMandatesQuery,
-    variables: { type: `${PACKAGE_ID}::mandate::Mandate` },
-  });
+type SharedMandatePage = {
+  nodes: { address?: string | null; asMoveObject?: { contents?: { json?: unknown } | null } | null }[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+};
+
+async function fetchSharedMandatesPage(type: string, after: string | null): Promise<SharedMandatePage | undefined> {
+  const result = await client.query({ query: GetSharedMandatesQuery, variables: { type, after } });
   if (result.errors?.length) {
     throw new Error(`Shared Mandate query failed: ${JSON.stringify(result.errors)}`);
   }
-  const nodes = result.data?.objects?.nodes ?? [];
+  return result.data?.objects ?? undefined;
+}
+
+export async function findAllMandateDetails(owner: string, delegate: string): Promise<MandateDetails[]> {
   const matches: MandateDetails[] = [];
-  for (const node of nodes) {
-    const json = node?.asMoveObject?.contents?.json as MandateJson | undefined;
-    if (node?.address && json && !json.revoked && json.owner === owner && json.delegate === delegate) {
-      matches.push({
-        mandateId: node.address,
-        delegate: json.delegate,
-        maxSpendMist: BigInt(json.max_spend),
-        spentSoFarMist: BigInt(json.spent_so_far),
-        fundsMist: readMistValue(json.funds),
-        allowedCategories: json.allowed_categories,
-        expiresAtMs: Number(json.expires_at),
-        revoked: json.revoked,
-      });
+  let hasNextPage = true;
+  let after: string | null = null;
+  while (hasNextPage) {
+    const page = await fetchSharedMandatesPage(`${PACKAGE_ID}::mandate::Mandate`, after);
+    for (const node of page?.nodes ?? []) {
+      const json = node?.asMoveObject?.contents?.json as MandateJson | undefined;
+      if (node?.address && json && !json.revoked && json.owner === owner && json.delegate === delegate) {
+        matches.push({
+          mandateId: node.address,
+          delegate: json.delegate,
+          maxSpendMist: BigInt(json.max_spend),
+          spentSoFarMist: BigInt(json.spent_so_far),
+          fundsMist: readMistValue(json.funds),
+          allowedCategories: json.allowed_categories,
+          expiresAtMs: Number(json.expires_at),
+          revoked: json.revoked,
+        });
+      }
     }
+    hasNextPage = page?.pageInfo?.hasNextPage ?? false;
+    after = page?.pageInfo?.endCursor ?? null;
   }
   return matches;
 }

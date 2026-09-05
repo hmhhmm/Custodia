@@ -41,6 +41,9 @@ import { discoverAgents } from "../agent/discovery";
 import { interpretGoal } from "../agent/llm";
 import { buildLockEscrowAndCreateDealTx, extractDealIdFromResult } from "../sui/ptb-escrow";
 import { buildCreateDealAllowlistTx, extractAllowlistIdFromEffects } from "../sui/ptb-deal-access";
+import { buildCreateDealBriefTx } from "../sui/ptb-deal-brief";
+import { encryptDealContent } from "../verification/seal";
+import { storeBlob } from "../verification/walrus";
 import { findOwnedAgentIdentity, findMandateDetails } from "../sui/onboarding-status";
 import { MANDATE_CATEGORIES, type OnboardingResult } from "./Onboarding";
 import type { PendingRelease, StatusStep } from "./types";
@@ -246,6 +249,43 @@ export async function createDealAndEscrow(
     allowlistId = extracted;
   } catch (err) {
     fail(5, `Seal allowlist setup failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // --- REAL PTB: write the specialist's actual work order on-chain -----
+  // The rich task brief Gemini produced (what the item specifically is,
+  // where to collect/deliver it, contact details — see chat.ts's
+  // start_deal/start_deal_chain tool schemas) previously existed only in
+  // the CLIENT's own chat history and was never stored anywhere the
+  // specialist could read it — a real gap, not a display bug: a
+  // specialist accepting a Deal saw only its category and amount, with
+  // no way to learn where to actually go. Seal-encrypted against the
+  // allowlist just created, so only the two real parties on this Deal
+  // can decrypt it — same real infra already used for deliverables, now
+  // used for the brief that starts the work instead of the proof that
+  // ends it. Signed by envoyKeypair, same as every other client-side
+  // write on this Deal — see this file's header on why Envoy, not the
+  // connected wallet, owns the client AgentIdentity.
+  try {
+    const briefBytes = new TextEncoder().encode(goal);
+    const encryptedBrief = await encryptDealContent(briefBytes, dAppKit.getClient(), allowlistId);
+    const storedBrief = await storeBlob(encryptedBrief.encryptedObject);
+    const briefTx = buildCreateDealBriefTx({
+      dealId,
+      clientAgentIdentityId: envoyAgent.agentId,
+      storageId: storedBrief.blobId,
+      seedId: encryptedBrief.seedId,
+    });
+    const briefResult = await envoyKeypair.signAndExecuteTransaction({ transaction: briefTx, client: dAppKit.getClient() });
+    if (briefResult.FailedTransaction) {
+      throw new Error(briefResult.FailedTransaction.status.error?.message ?? "Brief creation failed");
+    }
+  } catch (err) {
+    // Genuinely non-fatal for the deal itself — escrow is already locked
+    // and the specialist can still be reached some other way — but
+    // surfaced loudly rather than silently swallowed, since a missing
+    // brief is exactly the "specialist doesn't know where to collect"
+    // problem this feature exists to fix.
+    console.error("Deal brief creation failed for", dealId, err);
   }
 
   handlers.onEscrowed({

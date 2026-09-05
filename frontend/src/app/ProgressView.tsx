@@ -421,6 +421,7 @@ export function ProgressView({
   onBack,
   onReturnToChat,
   onReleased,
+  embedded = false,
 }: {
   dealId: string;
   /** Present only when opened from a live in-session Chat turn — gives the
@@ -431,6 +432,13 @@ export function ProgressView({
   onBack: () => void;
   onReturnToChat: () => void;
   onReleased: (receipt: DealReceipt) => void;
+  /** True when rendered as one leg inside ChainDetailView's stacked
+   * multi-leg page rather than as its own standalone page — hides this
+   * component's own outer page padding and "Back to deals"/"Return to
+   * chat" row, since the parent already renders exactly one of those for
+   * the whole chain. Everything else (status timeline, checkpoints,
+   * release button) renders identically either way. */
+  embedded?: boolean;
 }) {
   const [pending, setPending] = useState<PendingRelease | "loading" | null>(turn?.pending ?? "loading");
   const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
@@ -598,26 +606,28 @@ export function ProgressView({
   const amountSui = metadata ? Number(metadata.amountMist) / 1_000_000_000 : null;
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-sm text-manifest transition-colors hover:text-vellum focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          ← Back to deals
-        </button>
-        <div className="flex items-center gap-2">
-          <HideButton dealId={dealId} onHidden={onBack} />
+    <div className={embedded ? "" : "mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10"}>
+      {!embedded && (
+        <div className="mb-6 flex items-center justify-between">
           <button
             type="button"
-            onClick={onReturnToChat}
-            className="rounded-md border border-border px-3 py-1.5 text-sm text-vellum transition-colors hover:border-white/30"
+            onClick={onBack}
+            className="text-sm text-manifest transition-colors hover:text-vellum focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            Return to chat
+            ← Back to deals
           </button>
+          <div className="flex items-center gap-2">
+            <HideButton dealId={dealId} onHidden={onBack} />
+            <button
+              type="button"
+              onClick={onReturnToChat}
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-vellum transition-colors hover:border-white/30"
+            >
+              Return to chat
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="rounded-xl border border-border bg-surface p-6">
         <div className="flex items-start justify-between gap-4">

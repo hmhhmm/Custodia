@@ -17,11 +17,12 @@ import { sendChatTurn, type ChatMessage, type ChatAttachment } from "../agent/ch
 import { createDealAndEscrow, createDealChain } from "./orchestrator";
 import { releaseDeal, reconstructPendingRelease } from "./release";
 import { tryAdvanceChain } from "./chainAdvance";
-import { findDealById, findProofForDeal, type DealStatusName } from "../sui/deal-queries";
+import { findDealById, findProofForDeal, findCheckpointsForDeal, type DealStatusName, type DealCheckpointInfo } from "../sui/deal-queries";
 import type { OnboardingResult } from "./Onboarding";
 import type { AttachmentInfo, ChainInfo, ConversationTurn, DealReceipt, PendingRelease, StatusStep } from "./types";
 import { GENERAL_THREAD_ID } from "./types";
 import { StepList } from "./StatusFeed";
+import { formatDateTime } from "./ProgressView";
 import { Markdown } from "./components/Markdown";
 import { ChatThreadSidebar, deriveThreads } from "./ChatThreadSidebar";
 
@@ -302,16 +303,24 @@ export function ChatPanel({
         // synchronous call anymore. Once escrowed, the Deals tab takes
         // over (polls live status, shows the Verify & Release button).
         const dealId = crypto.randomUUID();
-        // Move the triggering message into this deal's own thread (see
-        // the header note above) and add the deal turn under the same
-        // thread — this is what makes "one thread per deal" real:
-        // everything about this deal, including the message that started
-        // it, lives together.
+        // Move EVERY turn currently in the active thread into this deal's
+        // own thread — not just the one message matching sentText by
+        // exact text. That narrower match was a real bug: once a
+        // clarifying question is involved (see the system instruction in
+        // agent/chat.ts), the message that actually triggers start_deal
+        // is the user's REPLY to that question, not their original
+        // request — matching only sentText left the original request
+        // permanently stranded in General as its own orphaned,
+        // untitled-looking thread while the reply alone moved to the new
+        // deal thread. Sweeping the whole active thread's history in is
+        // correct because a clarifying round-trip always happens within
+        // the SAME thread before a deal starts — only do this when that
+        // thread is General, though: if the user was mid-conversation in
+        // an existing deal's thread, its unrelated history must not be
+        // swept into a brand-new one.
         onTurnsChange((prev) => [
           ...prev.map((t) =>
-            t.kind === "text" && t.threadId === activeThreadId && t.text === sentText && t.role === "user"
-              ? { ...t, threadId: dealId }
-              : t,
+            activeThreadId === GENERAL_THREAD_ID && t.threadId === activeThreadId ? { ...t, threadId: dealId } : t,
           ),
           { kind: "deal", id: dealId, task: result.task, steps: [], receipt: null, pending: null, threadId: dealId },
         ]);
@@ -363,12 +372,15 @@ export function ChatPanel({
         legTotal: result.legs.length,
         remainingLegs: result.legs.slice(1),
       };
+      // Same fix as start_deal above: sweep EVERY turn from the active
+      // thread (only when it's General) into the new chain thread, not
+      // just the one message matching sentText — a clarifying-question
+      // round-trip means the message that actually triggers
+      // start_deal_chain is the user's reply, not their original
+      // request, and matching only that reply stranded the original
+      // request in General as its own orphaned thread.
       onTurnsChange((prev) => [
-        ...prev.map((t) =>
-          t.kind === "text" && t.threadId === activeThreadId && t.text === sentText && t.role === "user"
-            ? { ...t, threadId: chainId }
-            : t,
-        ),
+        ...prev.map((t) => (activeThreadId === GENERAL_THREAD_ID && t.threadId === activeThreadId ? { ...t, threadId: chainId } : t)),
         { kind: "deal", id: chainId, task: leg0.taskDescription, steps: [], receipt: null, pending: null, threadId: chainId, chain },
       ]);
       // The chain's thread is titled from the ORIGINAL multi-phase
@@ -664,13 +676,16 @@ const LIVE_STATUS_STEP_INDEX: Partial<Record<DealStatusName, number>> = {
 // amount info the reconstructed PendingRelease carries — "add more info,
 // no need to compact it" was explicit feedback, so these read as a real
 // status log rather than a terse label once escrow has locked.
-function liveStatusDetail(status: DealStatusName, pending: PendingRelease): string {
+function liveStatusDetail(status: DealStatusName, pending: PendingRelease, latestCheckpoint?: DealCheckpointInfo): string {
   const amount = pending.amountSui.toFixed(4);
   switch (status) {
     case "Escrowed":
       return `${amount} SUI is locked in escrow, waiting for ${pending.counterpartyName} to accept the offer from their own specialist inbox. Nothing moves until they do — if they never accept, the escrow refunds back to the Mandate once the delivery window lapses.`;
-    case "Accepted":
-      return `${pending.counterpartyName} accepted the offer with their own wallet signature and is now working on the delivery. ${amount} SUI stays locked in escrow until they mark it delivered and it's verified.`;
+    case "Accepted": {
+      const base = `${pending.counterpartyName} accepted the offer with their own wallet signature and is now working on the delivery. ${amount} SUI stays locked in escrow until they mark it delivered and it's verified.`;
+      if (!latestCheckpoint) return base;
+      return `${base} Latest update: "${latestCheckpoint.label}"${latestCheckpoint.note ? ` — ${latestCheckpoint.note}` : ""} (${formatDateTime(latestCheckpoint.createdAtMs)}).`;
+    }
     case "Delivered":
       return `${pending.counterpartyName} marked the work delivered and uploaded proof (Seal-encrypted, stored on Walrus). Ready to verify and release — click below to confirm delivery and pay out the ${amount} SUI.`;
     case "Verified":
@@ -763,8 +778,23 @@ function DealProgress({
   const [expanded, setExpanded] = useState(true);
   const [autoCollapsed, setAutoCollapsed] = useState(false);
   const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
+  // The granular specialist-pushed trail (e.g. "Picked up" -> "Arrived")
+  // — without this, Chat only ever showed the coarse Escrowed/Accepted/
+  // Delivered stage labels and sat on a single frozen "Waiting for the
+  // specialist to accept & deliver" line for the entire delivery window,
+  // even while the specialist was actively pushing real checkpoints that
+  // ProgressView already displayed live. Same data source, same poll
+  // cadence as ProgressView's own CheckpointItem trail, so the two views
+  // can never disagree.
+  const [checkpoints, setCheckpoints] = useState<DealCheckpointInfo[]>([]);
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
+  // Set the instant releaseDeal() resolves, but deliberately NOT the
+  // same thing as `receipt` (the prop) — this only becomes the App-level
+  // receipt (which pops the modal card open) once the user clicks "View
+  // receipt" below, so release finishing doesn't yank a card open on top
+  // of whatever the user is doing.
+  const [readyReceipt, setReadyReceipt] = useState<DealReceipt | null>(null);
   const [reconstructedPending, setReconstructedPending] = useState<PendingRelease | null>(null);
 
   const failed = steps.some((s) => s.state === "failed");
@@ -798,7 +828,7 @@ function DealProgress({
   }, [pending, dealIdFromSteps, reconstructedPending]);
 
   useEffect(() => {
-    if (!effectivePending || receipt) return;
+    if (!effectivePending || receipt || readyReceipt) return;
     let cancelled = false;
 
     async function poll() {
@@ -813,6 +843,12 @@ function DealProgress({
         // previously looked identical to "the chat status is wrong,"
         // when the real cause could be every fetch quietly failing.
         console.error("DealProgress poll failed for", effectivePending!.dealId, err);
+      }
+      try {
+        const found = await findCheckpointsForDeal(effectivePending!.dealId);
+        if (!cancelled) setCheckpoints(found);
+      } catch (err) {
+        console.error("DealProgress checkpoint poll failed for", effectivePending!.dealId, err);
       }
     }
 
@@ -907,7 +943,7 @@ function DealProgress({
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chain, isLatestUnadvancedLeg, effectivePending, connectedAddress, onboarding, onTurnsChange]);
+  }, [chain, isLatestUnadvancedLeg, effectivePending, connectedAddress, onboarding, onTurnsChange, readyReceipt]);
 
   // Once escrow locks, orchestrator.ts's static steps stop at
   // "work-in-progress" and never change again — it has no way to know what
@@ -927,9 +963,20 @@ function DealProgress({
   // specialist" in Chat while ProgressView (no such gate) showed Released.
   // A receipt is itself proof of the terminal state, so treat it as one.
   const effectiveLiveStatus: DealStatusName | null = receipt ? "Released" : liveStatus;
+  const latestCheckpoint = checkpoints.length > 0 ? checkpoints[checkpoints.length - 1] : undefined;
   const displaySteps: StatusStep[] = (() => {
     if (!effectivePending || !effectiveLiveStatus) return steps;
-    const targetIndex = LIVE_STATUS_STEP_INDEX[effectiveLiveStatus];
+    // verify_and_release() bumps BOTH reputations in the same atomic
+    // transaction as payment (see deal.move's verify_and_release calling
+    // client_reputation.record_completed() / specialist_reputation.
+    // record_completed() right after pay_specialist) — so a `receipt`
+    // existing means reputation is already done too, not merely payment.
+    // Without this, step 8 ("Updating on-chain reputation") sat at
+    // "pending" forever once release finished, since deal.move's status
+    // machine has no separate on-chain "Settled" phase this poll could
+    // ever observe distinct from Released, and the poll effect stops
+    // entirely the instant `receipt` is set (see the poll effect above).
+    const targetIndex = receipt ? steps.length - 1 : LIVE_STATUS_STEP_INDEX[effectiveLiveStatus];
     if (targetIndex === undefined) return steps;
     return steps.map((step, i) => {
       if (i < targetIndex) return step.state === "done" ? step : { ...step, state: "done" as const };
@@ -937,7 +984,9 @@ function DealProgress({
         return {
           ...step,
           state: effectiveLiveStatus === "Released" || effectiveLiveStatus === "Settled" ? ("done" as const) : ("active" as const),
-          detail: effectivePending ? liveStatusDetail(effectiveLiveStatus, effectivePending) : (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? step.detail),
+          detail: effectivePending
+            ? liveStatusDetail(effectiveLiveStatus, effectivePending, latestCheckpoint)
+            : (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? step.detail),
         };
       }
       return step.state === "pending" ? step : { ...step, state: "pending" as const, detail: undefined };
@@ -989,7 +1038,12 @@ function DealProgress({
     setReleaseError(null);
     try {
       const finalReceipt = await releaseDeal(effectivePending);
-      onReleased(finalReceipt);
+      // Hold the receipt here rather than opening the pop-out card
+      // immediately — release finishing and the user actually being
+      // ready to look at a receipt are two different moments. The card
+      // now shows a real "View receipt" button; onReleased (which pops
+      // the modal open in App.tsx) only fires once that's clicked.
+      setReadyReceipt(finalReceipt);
     } catch (err) {
       setReleaseError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1002,7 +1056,9 @@ function DealProgress({
     : allDone
       ? "Done"
       : effectivePending && effectiveLiveStatus
-        ? (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? "Working…")
+        ? (effectiveLiveStatus === "Accepted" && latestCheckpoint
+            ? latestCheckpoint.label
+            : (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? "Working…"))
         : displaySteps.find((s) => s.state === "active")?.label ?? "Working…";
 
   return (
@@ -1037,7 +1093,22 @@ function DealProgress({
               <p className="mb-4 text-xs text-manifest">Task: {task}</p>
               <StepList steps={displaySteps} />
 
-              {effectivePending && !receipt && liveStatus === "Delivered" && (
+              {checkpoints.length > 0 && (
+                <div className="mt-4 space-y-3 border-t border-border pt-4">
+                  {checkpoints.map((c) => (
+                    <div key={c.checkpointId}>
+                      <p className="text-[11px] uppercase tracking-wide text-manifest">Specialist update</p>
+                      <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                        <p className="text-sm text-vellum">{c.label}</p>
+                        <p className="shrink-0 text-xs text-manifest">{formatDateTime(c.createdAtMs)}</p>
+                      </div>
+                      {c.note && <p className="mt-1 text-sm text-manifest">{c.note}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {effectivePending && !receipt && !readyReceipt && liveStatus === "Delivered" && (
                 <div className="mt-4 border-t border-border pt-4">
                   <button
                     type="button"
@@ -1048,6 +1119,21 @@ function DealProgress({
                     {releasing ? "Releasing…" : "Verify & Release Payment"}
                   </button>
                   {releaseError && <p className="mt-2 text-sm text-wax">{releaseError}</p>}
+                </div>
+              )}
+
+              {readyReceipt && !receipt && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <p className="mb-2 text-sm text-vellum">
+                    Payment released — {readyReceipt.amount.toFixed(4)} SUI paid to {readyReceipt.counterpartyName}.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onReleased(readyReceipt)}
+                    className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90"
+                  >
+                    View receipt
+                  </button>
                 </div>
               )}
 

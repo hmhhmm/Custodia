@@ -16,6 +16,7 @@ import {
   findAllowlistForDeal,
   findDealMetadata,
   findCheckpointsForDeal,
+  findBriefForDeal,
   type SpecialistDeal,
   type DealMetadata,
   type DealCheckpointInfo,
@@ -40,15 +41,20 @@ import { formatDateTime } from "./ProgressView";
 // label in each list is the one that also finalizes delivery (calls
 // mark_delivered in the same action) — see CheckpointFlow's
 // isFinalCheckpoint logic below.
+//
+// Two stages per category, not three — the middle "en route"/"in
+// progress" checkpoint was cut per explicit feedback: a real specialist
+// pushing status from the field wants "started" and "done", not a
+// mid-point update that mostly just adds an extra required tap.
 const CHECKPOINT_LABELS: Record<string, string[]> = {
-  logistics: ["Picked up", "En route", "Arrived"],
-  courier: ["Picked up", "En route", "Delivered"],
-  research: ["Inspection started", "Work in progress", "Complete"],
-  design: ["Draft started", "Draft ready for review", "Final delivered"],
-  "legal-review": ["Review started", "Findings drafted", "Review complete"],
-  translation: ["Translation started", "Draft ready", "Final delivered"],
+  logistics: ["Picked up", "Arrived"],
+  courier: ["Picked up", "Delivered"],
+  research: ["Inspection started", "Complete"],
+  design: ["Draft started", "Final delivered"],
+  "legal-review": ["Review started", "Review complete"],
+  translation: ["Translation started", "Final delivered"],
 };
-const DEFAULT_CHECKPOINT_LABELS = ["Started", "In progress", "Complete"];
+const DEFAULT_CHECKPOINT_LABELS = ["Started", "Complete"];
 
 function checkpointLabelsFor(category: string | undefined): string[] {
   return (category && CHECKPOINT_LABELS[category]) || DEFAULT_CHECKPOINT_LABELS;
@@ -518,9 +524,52 @@ function ActiveJobScreen({
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // the label being pushed, or null
   const [error, setError] = useState<string | null>(null);
+  // The real task brief (what the item is, where to collect/deliver it,
+  // contact details) — written by the client at escrow time (see
+  // orchestrator.ts's new "write the specialist's actual work order"
+  // step) and never shown here before, which was the exact "specialist
+  // doesn't know where to collect" gap reported live. Decrypted with the
+  // CONNECTED wallet's own signature — a genuine user action reading a
+  // real Deal-scoped secret, same pattern Receipt.tsx already uses for
+  // the deliverable, just the brief instead of the proof.
+  const [brief, setBrief] = useState<"loading" | "none" | "locked" | string>("loading");
 
   const displayAmountMist = metadata?.amountMist ?? deal.escrowedAmountMist;
   const labels = checkpointLabelsFor(metadata?.category);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBrief("loading");
+
+    async function load() {
+      try {
+        const found = await findBriefForDeal(deal.dealId);
+        if (cancelled) return;
+        if (!found) {
+          setBrief("none");
+          return;
+        }
+        const allowlistId = await findAllowlistForDeal(deal.dealId);
+        if (cancelled) return;
+        if (!allowlistId) {
+          setBrief("locked");
+          return;
+        }
+        const encrypted = await readBlob(found.storageId);
+        const signer = new CurrentAccountSigner(dAppKitSingleton as unknown as DAppKit);
+        const decrypted = await decryptDealContent(encrypted, dAppKitSingleton.getClient(), allowlistId, found.seedId, signer);
+        if (!cancelled) setBrief(new TextDecoder().decode(decrypted));
+      } catch (err) {
+        console.error("brief decrypt failed for", deal.dealId, err);
+        if (!cancelled) setBrief("locked");
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [deal.dealId]);
 
   // Real re-fetch, not a one-shot on mount — a component-scoped `useEffect`
   // keyed only on `deal.dealId` ran ONCE and never again for the lifetime
@@ -670,6 +719,18 @@ function ActiveJobScreen({
           <p className="mt-1.5 text-2xl font-semibold tracking-tight text-vellum">{mistToSui(displayAmountMist)}</p>
         </div>
         <span className="shrink-0 rounded-full border border-border px-2.5 py-1 text-xs text-manifest">{deal.status}</span>
+      </div>
+
+      <div className="border-t border-border p-5">
+        <p className="mb-2 text-sm font-medium text-vellum">Task brief</p>
+        {brief === "loading" && <p className="text-sm text-manifest">Loading…</p>}
+        {brief === "none" && (
+          <p className="text-sm text-manifest">The client didn't attach a written brief for this deal.</p>
+        )}
+        {brief === "locked" && <p className="text-sm text-wax">Couldn't decrypt the brief right now — try refreshing.</p>}
+        {brief !== "loading" && brief !== "none" && brief !== "locked" && (
+          <p className="whitespace-pre-wrap text-sm text-vellum">{brief}</p>
+        )}
       </div>
 
       <div className="border-t border-border p-5">

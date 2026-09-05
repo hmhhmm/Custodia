@@ -10,8 +10,16 @@ import { dAppKit } from "../sui/dapp-kit";
 import { buildCreateFundedMandateTx, extractMandateIdFromResult } from "../sui/ptb-mandate";
 import { MANDATE_CATEGORIES } from "./Onboarding";
 
-const DEFAULT_MAX_SPEND_SUI = 0.2;
-const DEFAULT_FUNDING_SUI = 0.1;
+// A single "SUI limit" input now funds AND authorizes the SAME amount —
+// the form used to fund a hardcoded 0.1 SUI regardless of what the user
+// typed here, while this value only set the AUTHORIZATION cap
+// (max_spend). mandate.move's real spendable() = min(remaining, funds),
+// so a Mandate authorized for 0.2 but funded with only 0.1 silently caps
+// out at 0.1 the moment spending starts — confusing and, worse,
+// impossible to tell apart from a genuine on-chain discrepancy just by
+// looking at the "0.2 SUI limit" label. One input, one real amount for
+// both, so what's typed is exactly what's available.
+const DEFAULT_MANDATE_SUI = 1;
 const MANDATE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function mistToSui(mist: bigint): number {
@@ -45,7 +53,7 @@ function MandateIdCopy({ mandateId }: { mandateId: string }) {
 }
 
 function NewMandateForm({ onCreated }: { onCreated: (mandate: MandateDetails) => void }) {
-  const [maxSpend, setMaxSpend] = useState(DEFAULT_MAX_SPEND_SUI);
+  const [amount, setAmount] = useState(DEFAULT_MANDATE_SUI);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,10 +63,10 @@ function NewMandateForm({ onCreated }: { onCreated: (mandate: MandateDetails) =>
     try {
       const tx = buildCreateFundedMandateTx({
         delegate: ENVOY_ADDRESS,
-        maxSpend: suiToMist(maxSpend),
+        maxSpend: suiToMist(amount),
         allowedCategories: [...MANDATE_CATEGORIES],
         expiresAtMs: BigInt(Date.now() + MANDATE_DURATION_MS),
-        fundingAmount: suiToMist(DEFAULT_FUNDING_SUI),
+        fundingAmount: suiToMist(amount),
       });
       const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
       if (result.FailedTransaction) {
@@ -69,9 +77,9 @@ function NewMandateForm({ onCreated }: { onCreated: (mandate: MandateDetails) =>
       onCreated({
         mandateId,
         delegate: ENVOY_ADDRESS,
-        maxSpendMist: suiToMist(maxSpend),
+        maxSpendMist: suiToMist(amount),
         spentSoFarMist: 0n,
-        fundsMist: suiToMist(DEFAULT_FUNDING_SUI),
+        fundsMist: suiToMist(amount),
         allowedCategories: [...MANDATE_CATEGORIES],
         expiresAtMs: Date.now() + MANDATE_DURATION_MS,
         revoked: false,
@@ -87,14 +95,14 @@ function NewMandateForm({ onCreated }: { onCreated: (mandate: MandateDetails) =>
   return (
     <div className="rounded-lg border border-border p-5">
       <p className="text-sm font-medium text-vellum">Fund a new Mandate</p>
-      <p className="mt-1 text-sm text-manifest">Top up Envoy's spending limit with {DEFAULT_FUNDING_SUI} SUI from your wallet.</p>
+      <p className="mt-1 text-sm text-manifest">Envoy is authorized to spend up to this amount, funded from your wallet with the same amount.</p>
       <div className="mt-3 flex items-center gap-2">
         <input
           type="number"
           min={0.1}
           step={0.1}
-          value={maxSpend}
-          onChange={(e) => setMaxSpend(Number(e.target.value))}
+          value={amount}
+          onChange={(e) => setAmount(Number(e.target.value))}
           disabled={busy}
           className="w-32 rounded-md border border-border bg-surface px-3 py-2 font-data text-sm text-vellum focus:border-accent focus:outline-none disabled:opacity-40"
         />
