@@ -2,10 +2,20 @@
 // what's actually on-chain for the connected address — App.tsx's screen
 // state is otherwise lost on every reload, which makes a wallet that has
 // already completed onboarding look broken.
+//
+// AgentIdentity and Mandate are both PRE-UPGRADE types (defined in the
+// package's original publish, unchanged since) — every type-filtered scan
+// here must use ORIGINAL_PACKAGE_ID, never PACKAGE_ID. Using PACKAGE_ID
+// was a real bug: once the package was upgraded (see move/Published.toml
+// and config.ts's header comment on type anchoring), PACKAGE_ID pointed
+// at the NEW package id, which has no `agent_identity::AgentIdentity` or
+// `mandate::Mandate` type at all — every existing Mandate/AgentIdentity
+// became invisible to these scans, making a wallet that had already
+// finished onboarding look like it needed to set up again.
 
 import { SuiGraphQLClient } from "@mysten/sui/graphql";
 import { graphql } from "@mysten/sui/graphql/schema";
-import { PACKAGE_ID } from "./config";
+import { ORIGINAL_PACKAGE_ID } from "./config";
 import type { RegisteredAgent } from "./ptb-register-agent";
 
 const GRAPHQL_URL = "https://graphql.testnet.sui.io/graphql";
@@ -133,7 +143,7 @@ type OwnedAgentIdentityPage = {
 async function fetchOwnedAgentIdentitiesPage(owner: string, after: string | null): Promise<OwnedAgentIdentityPage | undefined> {
   const result = await client.query({
     query: GetOwnedAgentIdentitiesQuery,
-    variables: { owner, type: `${PACKAGE_ID}::agent_identity::AgentIdentity`, after },
+    variables: { owner, type: `${ORIGINAL_PACKAGE_ID}::agent_identity::AgentIdentity`, after },
   });
   if (result.errors?.length) {
     throw new Error(`Owned AgentIdentity query failed: ${JSON.stringify(result.errors)}`);
@@ -256,7 +266,7 @@ export async function findAllMandateDetails(owner: string, delegate: string): Pr
   let hasNextPage = true;
   let after: string | null = null;
   while (hasNextPage) {
-    const page = await fetchSharedMandatesPage(`${PACKAGE_ID}::mandate::Mandate`, after);
+    const page = await fetchSharedMandatesPage(`${ORIGINAL_PACKAGE_ID}::mandate::Mandate`, after);
     for (const node of page?.nodes ?? []) {
       const json = node?.asMoveObject?.contents?.json as MandateJson | undefined;
       if (node?.address && json && !json.revoked && json.owner === owner && json.delegate === delegate) {

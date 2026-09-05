@@ -474,14 +474,25 @@ export interface DealCheckpointInfo {
 
 /** Finds every DealCheckpoint scoped to `dealId`, oldest first — the real
  * granular status trail a specialist pushes (see move/sources/checkpoint.move),
- * additive alongside Deal's own coarse status. checkpoint::DealCheckpoint
- * is a type introduced BY the package upgrade that added checkpoint.move,
- * so — unlike every other query in this file — this one correctly uses
- * PACKAGE_ID (the latest/upgraded id), not ORIGINAL_PACKAGE_ID; see
- * config.ts's header comment on why the two constants exist and diverge
- * after an upgrade. */
+ * additive alongside Deal's own coarse status.
+ *
+ * IMPORTANT: this must use ORIGINAL_PACKAGE_ID, not PACKAGE_ID. A struct's
+ * type is anchored to the package it was FIRST published under, forever —
+ * not wherever it happens to get compiled into on a later upgrade. This
+ * WAS correctly PACKAGE_ID back when checkpoint.move's upgrade was the
+ * only upgrade this package had ever had (so "latest package" and
+ * "package that introduced DealCheckpoint" were the same value) — but a
+ * SECOND upgrade (adding deal_brief.move) moved PACKAGE_ID forward again
+ * without moving DealCheckpoint's real anchor with it. Confirmed directly
+ * against a real on-chain transaction's objectChanges: a genuinely
+ * successful checkpoint::new_and_share call created an object typed
+ * `<original-package>::checkpoint::DealCheckpoint`, not
+ * `<latest-package>::checkpoint::DealCheckpoint` — querying the latter
+ * silently matched zero objects every time, with no error at any layer,
+ * making a specialist's real, wallet-confirmed status push look like it
+ * had done nothing at all. */
 export async function findCheckpointsForDeal(dealId: string): Promise<DealCheckpointInfo[]> {
-  const nodes = await queryAllSharedByType(`${PACKAGE_ID}::checkpoint::DealCheckpoint`);
+  const nodes = await queryAllSharedByType(`${ORIGINAL_PACKAGE_ID}::checkpoint::DealCheckpoint`);
   const matches: DealCheckpointInfo[] = [];
   for (const node of nodes) {
     const json = node?.asMoveObject?.contents?.json as DealCheckpointJson | undefined;
@@ -517,9 +528,18 @@ export interface DealBriefInfo {
  * nothing in deal.move's own fields ever carried (only category and
  * amount). See move/sources/deal_brief.move's header for why this needed
  * its own object rather than reusing DealCheckpoint or DealProof.
- * deal_brief::DealBrief is a type introduced BY the package upgrade that
- * added deal_brief.move, so — like checkpoint::DealCheckpoint — this
- * correctly uses PACKAGE_ID, not ORIGINAL_PACKAGE_ID. */
+ *
+ * deal_brief::DealBrief was introduced by the package's SECOND (most
+ * recent) upgrade — the same upgrade that made PACKAGE_ID point here —
+ * so PACKAGE_ID is correct for this one specifically. Do NOT use this as
+ * a template for "any type from any past upgrade uses PACKAGE_ID": a
+ * type is anchored FOREVER to whichever package first introduced it, not
+ * to "the latest package" in general — checkpoint::DealCheckpoint above
+ * is the cautionary example: it needed ORIGINAL_PACKAGE_ID once a SECOND
+ * upgrade moved PACKAGE_ID past the upgrade that introduced it. If this
+ * package is ever upgraded a third time, re-check whether DealBrief needs
+ * to move to a THIRD constant of its own rather than assuming it can stay
+ * on PACKAGE_ID indefinitely. */
 export async function findBriefForDeal(dealId: string): Promise<DealBriefInfo | null> {
   const nodes = await queryAllSharedByType(`${PACKAGE_ID}::deal_brief::DealBrief`);
   for (const node of nodes) {

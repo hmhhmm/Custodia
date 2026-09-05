@@ -655,15 +655,22 @@ function ActiveJobScreen({
       if (result.FailedTransaction) {
         throw new Error(result.FailedTransaction.status.error?.message ?? "checkpoint::new_and_share failed");
       }
+      // Confirms the transaction executed on the gRPC full node — it does
+      // NOT guarantee the SEPARATE GraphQL indexer findCheckpointsForDeal
+      // reads from has caught up yet (two different backends, no shared
+      // read-after-write guarantee — see the accessing-data skill's rule
+      // on this exact mistake). The retry below is a safety margin for
+      // that ordinary propagation delay — it is NOT what fixed the
+      // earlier "push always reads back as not found" bug; that was
+      // findCheckpointsForDeal querying DealCheckpoint under the wrong
+      // package id entirely (see its own comment in deal-queries.ts).
       await dAppKit.getClient().core.waitForTransaction({ result });
 
-      // Re-fetch checkpoints NOW, right after this push actually landed
-      // on-chain, and decide "is this the final label" from that FRESH
-      // list — not the closed-over `isFinalCheckpoint`, which was
-      // computed at the start of this render from whatever `checkpoints`
-      // happened to be BEFORE this push (see the loadCheckpoints comment
-      // above for why that was silently wrong past the first click).
-      const freshCheckpoints = await loadCheckpoints();
+      let freshCheckpoints = await loadCheckpoints();
+      for (let attempt = 0; attempt < 5 && !freshCheckpoints.some((c) => c.label === label); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        freshCheckpoints = await loadCheckpoints();
+      }
       const freshPushedLabels = new Set(freshCheckpoints.map((c) => c.label));
       const isActuallyFinal = labels.every((l) => freshPushedLabels.has(l) || l === label) && label === labels[labels.length - 1];
 

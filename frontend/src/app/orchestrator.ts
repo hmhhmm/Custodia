@@ -183,13 +183,24 @@ export async function createDealAndEscrow(
   await wait(STEP_DELAY_MS);
 
   // --- Steps 3-4: REAL PTB #1 -------------------------------------------
-  // onboarding.mandateId was created once during Onboarding.tsx, delegating
-  // to Envoy. Signed by envoyKeypair, not the connected wallet — see the
-  // file header. Envoy's own AgentIdentity was registered once during
-  // onboarding too (ensureEnvoyIdentity) — look it up fresh rather than
-  // threading it through OnboardingResult, since it's Envoy's, not tied to
-  // any particular user session.
-  const mandateId = onboarding.mandateId;
+  // Use the SAME Mandate object `mandate` (fetched fresh above, at line
+  // ~116) that the spend-limit check itself just passed against — NOT
+  // onboarding.mandateId, which is whatever Mandate happened to exist the
+  // one time onboarding ran and is never refreshed afterward. This was a
+  // real bug: a user who creates an ADDITIONAL Mandate later in the same
+  // session (e.g. a bigger one, after the first ran low) would see the
+  // "Passed — Mandate X allows..." message correctly describe the NEW
+  // Mandate (since findMandateDetails picks whichever has the most
+  // spendable room), while the actual escrow transaction silently signed
+  // against the OLD, stale onboarding.mandateId instead — so a check that
+  // said "passed" could still abort moments later with
+  // ESpendLimitExceeded against a completely different Mandate the user
+  // never even saw named. Signed by envoyKeypair, not the connected
+  // wallet — see the file header. Envoy's own AgentIdentity was
+  // registered once during onboarding too (ensureEnvoyIdentity) — look it
+  // up fresh rather than threading it through OnboardingResult, since
+  // it's Envoy's, not tied to any particular user session.
+  const mandateId = mandate.mandateId;
   const envoyAgent = await findOwnedAgentIdentity(ENVOY_ADDRESS, "client");
   if (!envoyAgent) {
     fail(3, "Envoy has no registered AgentIdentity yet — this should have been created during onboarding.");

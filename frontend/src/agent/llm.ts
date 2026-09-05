@@ -63,13 +63,13 @@ export async function interpretGoal(
   const prompt = forcedCategory
     ? `You are a task classifier for an on-chain escrow system. The category for this task is already fixed: "${forcedCategory}". Given a user's plain-language goal, respond with ONLY a JSON object (no markdown fences, no prose) with exactly these fields:
 - "category": always exactly "${forcedCategory}" (already decided, just echo it back)
-- "maxBudget": your best-guess reasonable budget in SUI as a plain number. This is a testnet demo with a hard cap of ${maxBudgetSui} SUI total — never return a number above ${maxBudgetSui}, even if a real-world price for this task would normally be higher.
+- "maxBudget": a SMALL, realistic testnet-demo budget in SUI as a plain number — think in the range of 0.01-0.2 SUI for a typical task, scaling only slightly for genuinely larger/more complex work. This is testnet play-money, not a real-world price estimate: do NOT scale your answer up just because a larger amount happens to be allowed. ${maxBudgetSui} SUI is ONLY an upper ceiling this account currently has room for — it is NOT a target, a suggestion, or a sign that a bigger number is expected; propose the smallest reasonable amount for the task first, and only approach ${maxBudgetSui} if the task is genuinely large in scope. Never return a number above ${maxBudgetSui}.
 - "description": a one-sentence restatement of what the user needs, in plain language
 
 User's goal: "${goal}"`
     : `You are a task classifier for an on-chain escrow system. Given a user's plain-language goal, respond with ONLY a JSON object (no markdown fences, no prose) with exactly these fields:
 - "category": must be exactly one of ${JSON.stringify(MANDATE_CATEGORIES)} — pick whichever fits best, even if imperfect
-- "maxBudget": your best-guess reasonable budget in SUI as a plain number. This is a testnet demo with a hard cap of ${maxBudgetSui} SUI total — never return a number above ${maxBudgetSui}, even if a real-world price for this task would normally be higher.
+- "maxBudget": a SMALL, realistic testnet-demo budget in SUI as a plain number — think in the range of 0.01-0.2 SUI for a typical task, scaling only slightly for genuinely larger/more complex work. This is testnet play-money, not a real-world price estimate: do NOT scale your answer up just because a larger amount happens to be allowed. ${maxBudgetSui} SUI is ONLY an upper ceiling this account currently has room for — it is NOT a target, a suggestion, or a sign that a bigger number is expected; propose the smallest reasonable amount for the task first, and only approach ${maxBudgetSui} if the task is genuinely large in scope. Never return a number above ${maxBudgetSui}.
 - "description": a one-sentence restatement of what the user needs, in plain language
 
 User's goal: "${goal}"`;
