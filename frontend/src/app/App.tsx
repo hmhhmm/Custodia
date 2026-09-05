@@ -14,6 +14,7 @@ import { Onboarding, type OnboardingResult } from "./Onboarding";
 import { Dashboard, type ChainDetailLeg } from "./Dashboard";
 import { MandateView } from "./MandateView";
 import { SpecialistOnboarding } from "./SpecialistOnboarding";
+import { FactCheckView } from "./FactCheckView";
 import { ChatPanel } from "./ChatPanel";
 import { ProgressView } from "./ProgressView";
 import { ChainDetailView } from "./ChainDetailView";
@@ -330,6 +331,11 @@ export function App() {
         {nav === "specialist" && (
           <ScreenTransition key="specialist">
             <SpecialistOnboarding />
+          </ScreenTransition>
+        )}
+        {nav === "verify" && (
+          <ScreenTransition key="verify">
+            <FactCheckView />
           </ScreenTransition>
         )}
       </AnimatePresence>
