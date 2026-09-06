@@ -2,10 +2,20 @@
 // what's actually on-chain for the connected address — App.tsx's screen
 // state is otherwise lost on every reload, which makes a wallet that has
 // already completed onboarding look broken.
+//
+// AgentIdentity and Mandate are both PRE-UPGRADE types (defined in the
+// package's original publish, unchanged since) — every type-filtered scan
+// here must use ORIGINAL_PACKAGE_ID, never PACKAGE_ID. Using PACKAGE_ID
+// was a real bug: once the package was upgraded (see move/Published.toml
+// and config.ts's header comment on type anchoring), PACKAGE_ID pointed
+// at the NEW package id, which has no `agent_identity::AgentIdentity` or
+// `mandate::Mandate` type at all — every existing Mandate/AgentIdentity
+// became invisible to these scans, making a wallet that had already
+// finished onboarding look like it needed to set up again.
 
 import { SuiGraphQLClient } from "@mysten/sui/graphql";
 import { graphql } from "@mysten/sui/graphql/schema";
-import { PACKAGE_ID } from "./config";
+import { ORIGINAL_PACKAGE_ID } from "./config";
 import type { RegisteredAgent } from "./ptb-register-agent";
 
 const GRAPHQL_URL = "https://graphql.testnet.sui.io/graphql";
@@ -23,14 +33,18 @@ const client = new SuiGraphQLClient({ url: GRAPHQL_URL, network: "testnet" });
 // lives right on the node, there's no `asMoveObject` wrapper like the
 // `object(address:)` single-entity query uses (see discovery.ts).
 const GetOwnedAgentIdentitiesQuery = graphql(`
-  query GetOwnedAgentIdentities($owner: SuiAddress!, $type: String!) {
+  query GetOwnedAgentIdentities($owner: SuiAddress!, $type: String!, $after: String) {
     address(address: $owner) {
-      objects(filter: { type: $type }) {
+      objects(filter: { type: $type }, after: $after) {
         nodes {
           address
           contents {
             json
           }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
         }
       }
     }
@@ -49,8 +63,8 @@ const GetOwnedAgentIdentitiesQuery = graphql(`
 // asMoveObject), unlike Address.objects above which yields MoveObject
 // directly — same distinction discovery.ts already deals with.
 const GetSharedMandatesQuery = graphql(`
-  query GetSharedMandates($type: String!) {
-    objects(filter: { type: $type, ownerKind: SHARED }) {
+  query GetSharedMandates($type: String!, $after: String) {
+    objects(filter: { type: $type, ownerKind: SHARED }, after: $after) {
       nodes {
         address
         asMoveObject {
@@ -58,6 +72,10 @@ const GetSharedMandatesQuery = graphql(`
             json
           }
         }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
@@ -117,23 +135,97 @@ function readMistValue(raw: unknown): bigint {
 /** Finds every AgentIdentity owned by `owner` — there is no registry index
  * by owner, so this scans the (small, per-wallet) set of AgentIdentity
  * objects directly. */
-export async function findOwnedAgentIdentities(owner: string): Promise<(RegisteredAgent & { capabilities: string[] })[]> {
+type OwnedAgentIdentityPage = {
+  nodes: { address?: string | null; contents?: { json?: unknown } | null }[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+};
+
+async function fetchOwnedAgentIdentitiesPage(owner: string, after: string | null): Promise<OwnedAgentIdentityPage | undefined> {
   const result = await client.query({
     query: GetOwnedAgentIdentitiesQuery,
-    variables: { owner, type: `${PACKAGE_ID}::agent_identity::AgentIdentity` },
+    variables: { owner, type: `${ORIGINAL_PACKAGE_ID}::agent_identity::AgentIdentity`, after },
   });
   if (result.errors?.length) {
     throw new Error(`Owned AgentIdentity query failed: ${JSON.stringify(result.errors)}`);
   }
-  const nodes = result.data?.address?.objects?.nodes ?? [];
+  return result.data?.address?.objects ?? undefined;
+}
+
+export async function findOwnedAgentIdentities(owner: string): Promise<(RegisteredAgent & { capabilities: string[] })[]> {
   const found: (RegisteredAgent & { capabilities: string[] })[] = [];
-  for (const node of nodes) {
-    const json = node?.contents?.json as AgentIdentityJson | undefined;
-    if (node?.address && json) {
-      found.push({ agentId: node.address, reputationId: json.reputation_id, capabilities: json.capabilities });
+  let hasNextPage = true;
+  let after: string | null = null;
+  while (hasNextPage) {
+    const page = await fetchOwnedAgentIdentitiesPage(owner, after);
+    for (const node of page?.nodes ?? []) {
+      const json = node?.contents?.json as AgentIdentityJson | undefined;
+      if (node?.address && json) {
+        found.push({ agentId: node.address, reputationId: json.reputation_id, capabilities: json.capabilities });
+      }
     }
+    hasNextPage = page?.pageInfo?.hasNextPage ?? false;
+    after = page?.pageInfo?.endCursor ?? null;
   }
   return found;
+}
+
+// Same multiGetObjects + Reputation.score batch-read pattern already
+// verified live in agent/discovery.ts's MultiGetReputationsQuery — kept
+// as a separate query here rather than importing that one, since
+// discovery.ts is scoped to ranking DISCOVERED candidates and this is
+// scoped to a wallet's OWN identities (a different call site, same
+// shared Reputation object type and read shape).
+const MultiGetReputationsQuery = graphql(`
+  query MultiGetOwnReputations($keys: [ObjectKey!]!) {
+    multiGetObjects(keys: $keys) {
+      address
+      asMoveObject {
+        contents {
+          json
+        }
+      }
+    }
+  }
+`);
+
+export interface ReputationInfo {
+  score: number;
+  completedDeals: number;
+  disputedDeals: number;
+}
+
+/** Batch-reads real on-chain Reputation.score/completed_deals/disputed_deals
+ * for a set of Reputation object ids — Reputation is a SHARED object
+ * (agent_identity::register_and_keep calls reputation.share()), so these
+ * are read directly by id, not scanned/filtered like an owned-object
+ * query. Returns a Map keyed by reputationId; ids with no match (e.g. a
+ * transient query hiccup) are simply absent, not zero-filled, so a
+ * caller can tell "not loaded yet" apart from "genuinely zero". */
+export async function findReputationScores(reputationIds: string[]): Promise<Map<string, ReputationInfo>> {
+  const map = new Map<string, ReputationInfo>();
+  if (reputationIds.length === 0) return map;
+
+  const result = await client.query({
+    query: MultiGetReputationsQuery,
+    variables: { keys: reputationIds.map((id) => ({ address: id })) },
+  });
+  if (result.errors?.length) {
+    throw new Error(`Reputation batch query failed: ${JSON.stringify(result.errors)}`);
+  }
+
+  for (const obj of result.data?.multiGetObjects ?? []) {
+    const json = obj?.asMoveObject?.contents?.json as
+      | { score?: number; completed_deals?: number; disputed_deals?: number }
+      | undefined;
+    if (obj?.address && typeof json?.score === "number") {
+      map.set(obj.address, {
+        score: json.score,
+        completedDeals: json.completed_deals ?? 0,
+        disputedDeals: json.disputed_deals ?? 0,
+      });
+    }
+  }
+  return map;
 }
 
 /** Finds an AgentIdentity owned by `owner` with the given capability tag
@@ -156,30 +248,42 @@ export async function findOwnedAgentIdentity(
  * is no owner-indexed query for shared objects (see GetSharedMandatesQuery
  * above). Fine at hackathon scale; would need a real indexer (see the
  * accessing-data skill) if the Mandate count ever grows large. */
-export async function findAllMandateDetails(owner: string, delegate: string): Promise<MandateDetails[]> {
-  const result = await client.query({
-    query: GetSharedMandatesQuery,
-    variables: { type: `${PACKAGE_ID}::mandate::Mandate` },
-  });
+type SharedMandatePage = {
+  nodes: { address?: string | null; asMoveObject?: { contents?: { json?: unknown } | null } | null }[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+};
+
+async function fetchSharedMandatesPage(type: string, after: string | null): Promise<SharedMandatePage | undefined> {
+  const result = await client.query({ query: GetSharedMandatesQuery, variables: { type, after } });
   if (result.errors?.length) {
     throw new Error(`Shared Mandate query failed: ${JSON.stringify(result.errors)}`);
   }
-  const nodes = result.data?.objects?.nodes ?? [];
+  return result.data?.objects ?? undefined;
+}
+
+export async function findAllMandateDetails(owner: string, delegate: string): Promise<MandateDetails[]> {
   const matches: MandateDetails[] = [];
-  for (const node of nodes) {
-    const json = node?.asMoveObject?.contents?.json as MandateJson | undefined;
-    if (node?.address && json && !json.revoked && json.owner === owner && json.delegate === delegate) {
-      matches.push({
-        mandateId: node.address,
-        delegate: json.delegate,
-        maxSpendMist: BigInt(json.max_spend),
-        spentSoFarMist: BigInt(json.spent_so_far),
-        fundsMist: readMistValue(json.funds),
-        allowedCategories: json.allowed_categories,
-        expiresAtMs: Number(json.expires_at),
-        revoked: json.revoked,
-      });
+  let hasNextPage = true;
+  let after: string | null = null;
+  while (hasNextPage) {
+    const page = await fetchSharedMandatesPage(`${ORIGINAL_PACKAGE_ID}::mandate::Mandate`, after);
+    for (const node of page?.nodes ?? []) {
+      const json = node?.asMoveObject?.contents?.json as MandateJson | undefined;
+      if (node?.address && json && !json.revoked && json.owner === owner && json.delegate === delegate) {
+        matches.push({
+          mandateId: node.address,
+          delegate: json.delegate,
+          maxSpendMist: BigInt(json.max_spend),
+          spentSoFarMist: BigInt(json.spent_so_far),
+          fundsMist: readMistValue(json.funds),
+          allowedCategories: json.allowed_categories,
+          expiresAtMs: Number(json.expires_at),
+          revoked: json.revoked,
+        });
+      }
     }
+    hasNextPage = page?.pageInfo?.hasNextPage ?? false;
+    after = page?.pageInfo?.endCursor ?? null;
   }
   return matches;
 }

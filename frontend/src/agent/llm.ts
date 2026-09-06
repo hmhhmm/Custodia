@@ -34,16 +34,42 @@ export interface InterpretedGoal {
  * `mandate::assert_within_mandate` aborts with ESpendLimitExceeded on
  * almost every real task.
  */
-export async function interpretGoal(goal: string, maxBudgetSui: number): Promise<InterpretedGoal> {
+/**
+ * `forcedCategory`: when set, this leg's category is ALREADY decided —
+ * e.g. one leg of a multi-agent chain, where start_deal_chain (chat.ts)
+ * already chose the category for this exact leg. Without this, each
+ * leg's own taskDescription got re-classified independently here, and
+ * Gemini could genuinely land on a DIFFERENT category than the one the
+ * chain actually escrowed against — a real bug this session: a leg
+ * whose task was literally "repair the laptop screen" got reclassified
+ * as "logistics" on a later, independent call, so discoverAgents()
+ * matched the wrong specialist type entirely. When forced, Gemini is
+ * only asked for budget/description, and the RETURNED category is
+ * discarded and replaced with forcedCategory regardless of what comes
+ * back — the same "never trust the prompt alone" principle already
+ * applied to the budget clamp below.
+ */
+export async function interpretGoal(
+  goal: string,
+  maxBudgetSui: number,
+  forcedCategory?: (typeof MANDATE_CATEGORIES)[number],
+): Promise<InterpretedGoal> {
   if (!GEMINI_API_KEY) {
     throw new Error(
       "interpretGoal: VITE_GEMINI_API_KEY is not set — add it to frontend/.env (see frontend/.env for the placeholder).",
     );
   }
 
-  const prompt = `You are a task classifier for an on-chain escrow system. Given a user's plain-language goal, respond with ONLY a JSON object (no markdown fences, no prose) with exactly these fields:
+  const prompt = forcedCategory
+    ? `You are a task classifier for an on-chain escrow system. The category for this task is already fixed: "${forcedCategory}". Given a user's plain-language goal, respond with ONLY a JSON object (no markdown fences, no prose) with exactly these fields:
+- "category": always exactly "${forcedCategory}" (already decided, just echo it back)
+- "maxBudget": a SMALL, realistic testnet-demo budget in SUI as a plain number — think in the range of 0.01-0.2 SUI for a typical task, scaling only slightly for genuinely larger/more complex work. This is testnet play-money, not a real-world price estimate: do NOT scale your answer up just because a larger amount happens to be allowed. ${maxBudgetSui} SUI is ONLY an upper ceiling this account currently has room for — it is NOT a target, a suggestion, or a sign that a bigger number is expected; propose the smallest reasonable amount for the task first, and only approach ${maxBudgetSui} if the task is genuinely large in scope. Never return a number above ${maxBudgetSui}.
+- "description": a one-sentence restatement of what the user needs, in plain language
+
+User's goal: "${goal}"`
+    : `You are a task classifier for an on-chain escrow system. Given a user's plain-language goal, respond with ONLY a JSON object (no markdown fences, no prose) with exactly these fields:
 - "category": must be exactly one of ${JSON.stringify(MANDATE_CATEGORIES)} — pick whichever fits best, even if imperfect
-- "maxBudget": your best-guess reasonable budget in SUI as a plain number. This is a testnet demo with a hard cap of ${maxBudgetSui} SUI total — never return a number above ${maxBudgetSui}, even if a real-world price for this task would normally be higher.
+- "maxBudget": a SMALL, realistic testnet-demo budget in SUI as a plain number — think in the range of 0.01-0.2 SUI for a typical task, scaling only slightly for genuinely larger/more complex work. This is testnet play-money, not a real-world price estimate: do NOT scale your answer up just because a larger amount happens to be allowed. ${maxBudgetSui} SUI is ONLY an upper ceiling this account currently has room for — it is NOT a target, a suggestion, or a sign that a bigger number is expected; propose the smallest reasonable amount for the task first, and only approach ${maxBudgetSui} if the task is genuinely large in scope. Never return a number above ${maxBudgetSui}.
 - "description": a one-sentence restatement of what the user needs, in plain language
 
 User's goal: "${goal}"`;
@@ -79,9 +105,13 @@ User's goal: "${goal}"`;
   }
 
   const obj = parsed as Record<string, unknown>;
+  // When forced, obj.category is never trusted or even required to be
+  // valid — forcedCategory is the single enforcement point regardless of
+  // whatever Gemini echoed back, same "never trust the prompt alone"
+  // principle as the hard maxBudget clamp below.
   if (
-    typeof obj.category !== "string" ||
-    !MANDATE_CATEGORIES.includes(obj.category as (typeof MANDATE_CATEGORIES)[number]) ||
+    (!forcedCategory &&
+      (typeof obj.category !== "string" || !MANDATE_CATEGORIES.includes(obj.category as (typeof MANDATE_CATEGORIES)[number]))) ||
     typeof obj.maxBudget !== "number" ||
     typeof obj.description !== "string"
   ) {
@@ -89,7 +119,7 @@ User's goal: "${goal}"`;
   }
 
   return {
-    category: obj.category as (typeof MANDATE_CATEGORIES)[number],
+    category: forcedCategory ?? (obj.category as (typeof MANDATE_CATEGORIES)[number]),
     // Hard clamp — the prompt asks Gemini to respect the cap, but nothing
     // stops it from ignoring that instruction, so this is the real
     // enforcement point. Math.min is applied LAST and outermost, so the

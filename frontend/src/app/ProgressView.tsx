@@ -31,7 +31,7 @@ import {
   type DealStageTimestamps,
   type DealCheckpointInfo,
 } from "../sui/deal-queries";
-import { releaseDeal, reconstructPendingRelease } from "./release";
+import { releaseDeal, reconstructPendingRelease, type ReleaseProgressStage } from "./release";
 import { summarizeDealTitle } from "../agent/llm";
 import { readBlob } from "../verification/walrus";
 import { decryptDealContent } from "../verification/seal";
@@ -53,6 +53,17 @@ const TIMELINE_STAGES: { status: DealStatusName; label: string }[] = [
   { status: "Delivered", label: "Delivered" },
   { status: "Released", label: "Payment released" },
 ];
+
+// Every stage here is a real on-chain read or the release transaction
+// itself — no LLM call happens during release.ts's releaseDeal, so this
+// label map is entirely honest about what the wait is actually for.
+const RELEASE_STAGE_LABEL: Record<ReleaseProgressStage, string> = {
+  "checking-proof": "Confirming delivery proof on-chain…",
+  "reading-balance-before": "Reading the specialist's current balance…",
+  signing: "Waiting for your signature…",
+  confirming: "Waiting for the release transaction to confirm on-chain…",
+  "verifying-balance": "Confirming the payment actually landed…",
+};
 
 function statusRank(status: DealStatusName): number {
   const order: DealStatusName[] = [
@@ -79,8 +90,8 @@ function StatusPill({ status }: { status: DealStatusName }) {
     Accepted: "text-manifest",
     Delivered: "text-slate-400",
     Verified: "text-manifest",
-    Released: "text-emerald-400",
-    Settled: "text-emerald-400",
+    Released: "text-vellum",
+    Settled: "text-vellum",
     Disputed: "text-red-400",
     Refunded: "text-manifest",
   };
@@ -213,13 +224,21 @@ function stageTimestamp(
   }
 }
 
-/** Horizontal (mobile: vertical) stepper across the 4 coarse on-chain
- * stages — Grab/Foodpanda-style order tracker, not a plain checklist —
- * with the specialist's real granular checkpoints (see
- * move/sources/checkpoint.move) rendered as a sub-trail beneath the
- * currently active/most-recent stage. Every timestamp and checkpoint here
- * is a real on-chain fact (Event.timestamp / DealCheckpoint fields), never
- * fabricated. */
+/** One row in the unified vertical timeline — either a coarse on-chain
+ * stage (Escrow locked / Accepted / Delivered / Payment released) or a
+ * specialist-pushed checkpoint, rendered on the SAME connected line in
+ * true chronological order. Merging them (rather than the earlier
+ * design's separate horizontal-stages-then-checkpoints-below layout) is
+ * what makes this read as one real order-tracker, not two disconnected
+ * lists. */
+type TimelineRow =
+  | { kind: "stage"; label: string; done: boolean; active: boolean; ts: number | null }
+  | { kind: "checkpoint"; checkpoint: DealCheckpointInfo };
+
+/** Real (single, continuous) vertical order-tracker — every row is a real
+ * on-chain fact (Event.timestamp for the 4 coarse stages,
+ * DealCheckpoint's own fields for specialist updates), merged in
+ * chronological order rather than shown as two separate lists. */
 function Timeline({
   status,
   createdAtMs,
@@ -237,53 +256,79 @@ function Timeline({
 }) {
   const currentRank = statusRank(status);
   const isDisputeLike = status === "Disputed" || status === "Refunded";
-  // Checkpoints belong under the "Accepted" stage — they're the
-  // specialist's real work-in-progress trail, pushed after accepting and
-  // before/at delivery (see checkpoint.move's header comment: additive
-  // alongside deal.move's own coarse status, never a replacement for it).
-  const acceptedStageIndex = TIMELINE_STAGES.findIndex((s) => s.status === "Accepted");
+
+  // Build every stage row with its real timestamp (or null if it hasn't
+  // happened yet), then interleave checkpoints by their own real
+  // createdAtMs — a checkpoint sorts wherever it chronologically falls,
+  // which in practice is always between "Accepted" and "Delivered" since
+  // that's the only window a specialist can push one, but computing it
+  // this way (rather than hardcoding "checkpoints go under Accepted")
+  // means the order is driven by real timestamps, not an assumption.
+  const stageRows: (TimelineRow & { kind: "stage"; sortMs: number })[] = TIMELINE_STAGES.map((stage) => {
+    const stageRank = statusRank(stage.status);
+    const done = !isDisputeLike && currentRank >= stageRank;
+    const active = !isDisputeLike && currentRank === stageRank - 1;
+    const ts = done ? stageTimestamp(stage.status, createdAtMs, stageTimes) : null;
+    // Undone/future stages sort to the end regardless of a missing
+    // timestamp — Infinity as a sort key, never rendered.
+    return { kind: "stage", label: stage.label, done, active, ts, sortMs: ts ?? Infinity };
+  });
+
+  const checkpointRows: (TimelineRow & { kind: "checkpoint"; sortMs: number })[] = checkpoints.map((c) => ({
+    kind: "checkpoint",
+    checkpoint: c,
+    sortMs: c.createdAtMs,
+  }));
+
+  const rows = [...stageRows, ...checkpointRows].sort((a, b) => a.sortMs - b.sortMs);
 
   return (
     <div>
-      <div className="flex flex-col gap-0 sm:flex-row sm:items-start sm:gap-0">
-        {TIMELINE_STAGES.map((stage, i) => {
-          const stageRank = statusRank(stage.status);
-          const done = !isDisputeLike && currentRank >= stageRank;
-          const active = !isDisputeLike && currentRank === stageRank - 1;
-          const isLast = i === TIMELINE_STAGES.length - 1;
-          const ts = done ? stageTimestamp(stage.status, createdAtMs, stageTimes) : null;
-          return (
-            <div key={stage.status} className="flex flex-1 gap-3 sm:flex-col sm:gap-0">
-              <div className="flex flex-col items-center sm:w-full sm:flex-row">
-                <span
-                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs ${
-                    done
-                      ? "border-emerald-500 bg-emerald-500 text-ink"
-                      : active
-                        ? "border-accent text-accent"
-                        : "border-border text-manifest"
-                  }`}
-                >
-                  {done ? "✓" : ""}
-                </span>
-                {!isLast && (
-                  <span
-                    className={`w-px flex-1 sm:h-px sm:w-auto ${done ? "bg-emerald-500/40" : "bg-border"}`}
-                    style={{ minHeight: "1.5rem" }}
-                  />
-                )}
-              </div>
-              <div className="flex flex-1 items-baseline justify-between gap-3 pb-6 sm:mt-2 sm:flex-col sm:items-start sm:gap-0.5 sm:pb-0 sm:pr-3">
-                <p className={`text-sm ${done || active ? "text-vellum" : "text-manifest"}`}>{stage.label}</p>
-                {ts && <p className="shrink-0 text-xs text-manifest">{formatDateTime(ts)}</p>}
-              </div>
-              {i === acceptedStageIndex && checkpoints.length > 0 && (
-                <div className="mb-6 mt-1 flex flex-col gap-3 border-l border-border pl-4 sm:ml-2.5 sm:mb-0">
-                  {checkpoints.map((c) => (
-                    <CheckpointItem key={c.checkpointId} checkpoint={c} dealId={dealId} allowlistId={allowlistId} />
-                  ))}
+      <div className="flex flex-col gap-0">
+        {rows.map((row, i) => {
+          const isLast = i === rows.length - 1;
+          // Every marker sits in the SAME h-6 w-6 column regardless of
+          // row kind, and the connecting line segment is a direct
+          // sibling of that column (not nested inside a smaller wrapper)
+          // — this is what keeps the line touching every dot with no
+          // visible gap, including at a checkpoint's smaller dot.
+          if (row.kind === "stage") {
+            return (
+              <div key={`stage-${row.label}`} className="flex gap-3">
+                <div className="flex w-6 shrink-0 flex-col items-center">
+                  {row.done ? (
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-vellum text-sm text-vellum">
+                      ✓
+                    </span>
+                  ) : row.active ? (
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-vellum">
+                      <span className="block h-2 w-2 rounded-full bg-vellum" />
+                    </span>
+                  ) : (
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+                      <span className="block h-2.5 w-2.5 rounded-full border-2 border-border" />
+                    </span>
+                  )}
+                  {!isLast && <span className={`w-px flex-1 ${row.done ? "bg-vellum" : "bg-border"}`} />}
                 </div>
-              )}
+                <div className="flex flex-1 items-baseline justify-between gap-3 pb-7">
+                  <p className={`text-sm font-medium ${row.done || row.active ? "text-vellum" : "text-manifest"}`}>{row.label}</p>
+                  {row.ts && <p className="shrink-0 text-xs text-manifest">{formatDateTime(row.ts)}</p>}
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={row.checkpoint.checkpointId} className="flex gap-3">
+              <div className="flex w-6 shrink-0 flex-col items-center">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center" aria-hidden="true">
+                  <span className="block h-2 w-2 rounded-full bg-vellum" />
+                </span>
+                {!isLast && <span className="w-px flex-1 bg-vellum" />}
+              </div>
+              <div className="flex-1 pb-7">
+                <CheckpointItem checkpoint={row.checkpoint} dealId={dealId} allowlistId={allowlistId} />
+              </div>
             </div>
           );
         })}
@@ -302,7 +347,9 @@ function Timeline({
  * CONNECTED wallet's own signature (the client, who is on this screen —
  * unlike chainAdvance.ts's automatic Envoy-signed summarization, a photo
  * click here is a genuine user action, so the same manual-decrypt pattern
- * Receipt.tsx already uses applies unchanged). */
+ * Receipt.tsx already uses applies unchanged). Rendered as a plain row —
+ * the connecting dot/line is drawn by the parent Timeline, since this
+ * row shares one continuous line with the coarse stages around it. */
 function CheckpointItem({
   checkpoint,
   dealId,
@@ -342,21 +389,22 @@ function CheckpointItem({
 
   return (
     <div>
-      <div className="flex items-baseline justify-between gap-3">
+      <p className="text-[11px] uppercase tracking-wide text-manifest">Specialist update</p>
+      <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <p className="text-sm text-vellum">{checkpoint.label}</p>
         <p className="shrink-0 text-xs text-manifest">{formatDateTime(checkpoint.createdAtMs)}</p>
       </div>
-      {checkpoint.note && <p className="mt-0.5 text-xs text-manifest">{checkpoint.note}</p>}
+      {checkpoint.note && <p className="mt-1 text-sm text-manifest">{checkpoint.note}</p>}
       {checkpoint.photo && (
-        <div className="mt-1.5">
+        <div className="mt-2">
           {photoUrl ? (
-            <img src={photoUrl} alt={checkpoint.label} className="max-h-40 rounded-md border border-border" />
+            <img src={photoUrl} alt={checkpoint.label} className="max-h-48 rounded-lg border border-border" />
           ) : (
             <button
               type="button"
               onClick={handleViewPhoto}
               disabled={photoStatus === "loading" || !allowlistId}
-              className="text-xs text-manifest underline underline-offset-2 hover:text-vellum disabled:opacity-40"
+              className="rounded-md border border-border px-2.5 py-1 text-xs text-manifest transition-colors hover:border-white/30 hover:text-vellum disabled:cursor-not-allowed disabled:opacity-40"
             >
               {photoStatus === "loading" ? "Decrypting…" : photoStatus === "error" ? "Failed to load — retry" : "View photo"}
             </button>
@@ -373,6 +421,7 @@ export function ProgressView({
   onBack,
   onReturnToChat,
   onReleased,
+  embedded = false,
 }: {
   dealId: string;
   /** Present only when opened from a live in-session Chat turn — gives the
@@ -383,6 +432,13 @@ export function ProgressView({
   onBack: () => void;
   onReturnToChat: () => void;
   onReleased: (receipt: DealReceipt) => void;
+  /** True when rendered as one leg inside ChainDetailView's stacked
+   * multi-leg page rather than as its own standalone page — hides this
+   * component's own outer page padding and "Back to deals"/"Return to
+   * chat" row, since the parent already renders exactly one of those for
+   * the whole chain. Everything else (status timeline, checkpoints,
+   * release button) renders identically either way. */
+  embedded?: boolean;
 }) {
   const [pending, setPending] = useState<PendingRelease | "loading" | null>(turn?.pending ?? "loading");
   const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
@@ -392,6 +448,7 @@ export function ProgressView({
   const [allowlistId, setAllowlistId] = useState<string | null>(null);
   const [title, setTitle] = useState<string | null>(() => getCachedDealTitle(dealId));
   const [releasing, setReleasing] = useState(false);
+  const [releaseStage, setReleaseStage] = useState<ReleaseProgressStage | null>(null);
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const alreadyReleased = Boolean(turn?.receipt);
 
@@ -529,14 +586,16 @@ export function ProgressView({
   async function handleRelease() {
     if (!pending || pending === "loading") return;
     setReleasing(true);
+    setReleaseStage(null);
     setReleaseError(null);
     try {
-      const receipt = await releaseDeal(pending);
+      const receipt = await releaseDeal(pending, setReleaseStage);
       onReleased(receipt);
     } catch (err) {
       setReleaseError(err instanceof Error ? err.message : String(err));
     } finally {
       setReleasing(false);
+      setReleaseStage(null);
     }
   }
 
@@ -547,26 +606,28 @@ export function ProgressView({
   const amountSui = metadata ? Number(metadata.amountMist) / 1_000_000_000 : null;
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10">
-      <div className="mb-6 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-sm text-manifest transition-colors hover:text-vellum focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          ← Back to deals
-        </button>
-        <div className="flex items-center gap-2">
-          <HideButton dealId={dealId} onHidden={onBack} />
+    <div className={embedded ? "" : "mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-10"}>
+      {!embedded && (
+        <div className="mb-6 flex items-center justify-between">
           <button
             type="button"
-            onClick={onReturnToChat}
-            className="rounded-md border border-border px-3 py-1.5 text-sm text-vellum transition-colors hover:border-white/30"
+            onClick={onBack}
+            className="text-sm text-manifest transition-colors hover:text-vellum focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
           >
-            Return to chat
+            ← Back to deals
           </button>
+          <div className="flex items-center gap-2">
+            <HideButton dealId={dealId} onHidden={onBack} />
+            <button
+              type="button"
+              onClick={onReturnToChat}
+              className="rounded-md border border-border px-3 py-1.5 text-sm text-vellum transition-colors hover:border-white/30"
+            >
+              Return to chat
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="rounded-xl border border-border bg-surface p-6">
         <div className="flex items-start justify-between gap-4">
@@ -632,6 +693,11 @@ export function ProgressView({
               >
                 {releasing ? "Releasing…" : pending === "loading" ? "Loading deal details…" : "Verify & Release Payment"}
               </button>
+              {releasing && (
+                <p className="mt-2 text-xs text-manifest">
+                  {releaseStage ? RELEASE_STAGE_LABEL[releaseStage] : "Starting…"}
+                </p>
+              )}
               {releaseError && <p className="mt-2 text-sm text-wax">{releaseError}</p>}
             </div>
           )}
@@ -639,8 +705,8 @@ export function ProgressView({
       )}
 
       {alreadyReleased && (
-        <div className="mt-6 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-6">
-          <p className="flex items-center gap-2 text-sm font-medium text-emerald-400">
+        <div className="mt-6 rounded-xl border border-border bg-surface p-6">
+          <p className="flex items-center gap-2 text-sm font-medium text-vellum">
             <span>✓</span>
             Payment released
           </p>

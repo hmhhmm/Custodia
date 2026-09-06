@@ -18,8 +18,8 @@ const GRAPHQL_URL = "https://graphql.testnet.sui.io/graphql";
 const client = new SuiGraphQLClient({ url: GRAPHQL_URL, network: "testnet" });
 
 const GetSharedDealsQuery = graphql(`
-  query GetSharedDeals($type: String!) {
-    objects(filter: { type: $type, ownerKind: SHARED }) {
+  query GetSharedDeals($type: String!, $after: String) {
+    objects(filter: { type: $type, ownerKind: SHARED }, after: $after) {
       nodes {
         address
         asMoveObject {
@@ -27,6 +27,10 @@ const GetSharedDealsQuery = graphql(`
             json
           }
         }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
@@ -37,8 +41,8 @@ const GetSharedDealsQuery = graphql(`
 // proof::share_proof), keyed to their owning Deal via a plain `deal_id`
 // field, not a Sui-level owner.
 const GetSharedByTypeQuery = graphql(`
-  query GetSharedByType($type: String!) {
-    objects(filter: { type: $type, ownerKind: SHARED }) {
+  query GetSharedByType($type: String!, $after: String) {
+    objects(filter: { type: $type, ownerKind: SHARED }, after: $after) {
       nodes {
         address
         asMoveObject {
@@ -47,9 +51,78 @@ const GetSharedByTypeQuery = graphql(`
           }
         }
       }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
     }
   }
 `);
+
+type SharedObjectNode = {
+  address?: string | null;
+  asMoveObject?: { contents?: { json?: unknown } | null } | null;
+};
+
+/** Walks every page of a GetSharedDealsQuery scan — the server applies its
+ * own default page size when `first` is omitted, so a single unpaginated
+ * call silently misses objects once a type has more shared instances
+ * on-chain than fit in one page (this was a real bug: a freshly-created
+ * Deal could fall outside the first page). */
+type SharedObjectPage = {
+  nodes: SharedObjectNode[];
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+};
+
+async function fetchSharedDealsPage(type: string, after: string | null): Promise<SharedObjectPage | undefined> {
+  const result = await client.query({ query: GetSharedDealsQuery, variables: { type, after } });
+  if (result.errors?.length) {
+    throw new Error(`Shared Deal query failed: ${JSON.stringify(result.errors)}`);
+  }
+  return result.data?.objects ?? undefined;
+}
+
+async function queryAllSharedDeals(type: string): Promise<SharedObjectNode[]> {
+  const allNodes: SharedObjectNode[] = [];
+  let hasNextPage = true;
+  let after: string | null = null;
+  while (hasNextPage) {
+    const page = await fetchSharedDealsPage(type, after);
+    allNodes.push(...(page?.nodes ?? []));
+    hasNextPage = page?.pageInfo?.hasNextPage ?? false;
+    after = page?.pageInfo?.endCursor ?? null;
+  }
+  return allNodes;
+}
+
+/** Same pagination fix as queryAllSharedDeals, for GetSharedByTypeQuery's
+ * DealAllowlist/DealProof/DealCheckpoint/DealBrief scans — a freshly
+ * created object of any of these types could otherwise fall outside the
+ * first page and read back as "not found" even though it had already
+ * landed on-chain (this was the exact cause of the specialist's
+ * "No DealAllowlist found... escrow-lock may not have finished" error
+ * appearing right after a client's escrow-lock step had genuinely
+ * finished). */
+async function fetchSharedByTypePage(type: string, after: string | null): Promise<SharedObjectPage | undefined> {
+  const result = await client.query({ query: GetSharedByTypeQuery, variables: { type, after } });
+  if (result.errors?.length) {
+    throw new Error(`Shared object query failed for ${type}: ${JSON.stringify(result.errors)}`);
+  }
+  return result.data?.objects ?? undefined;
+}
+
+async function queryAllSharedByType(type: string): Promise<SharedObjectNode[]> {
+  const allNodes: SharedObjectNode[] = [];
+  let hasNextPage = true;
+  let after: string | null = null;
+  while (hasNextPage) {
+    const page = await fetchSharedByTypePage(type, after);
+    allNodes.push(...(page?.nodes ?? []));
+    hasNextPage = page?.pageInfo?.hasNextPage ?? false;
+    after = page?.pageInfo?.endCursor ?? null;
+  }
+  return allNodes;
+}
 
 /** Mirrors custodia::deal::Deal's field names verbatim (excluding `id`).
  * VERIFY: DealStatus enum's exact GraphQL JSON shape wasn't confirmed
@@ -177,14 +250,7 @@ function readMistValue(raw: unknown): bigint {
  * data source. Scans every shared Deal on the package; fine at hackathon
  * scale, see the same note on findAllMandateDetails. */
 export async function findDealsForSpecialist(specialistAgentId: string): Promise<SpecialistDeal[]> {
-  const result = await client.query({
-    query: GetSharedDealsQuery,
-    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::Deal` },
-  });
-  if (result.errors?.length) {
-    throw new Error(`Shared Deal query failed: ${JSON.stringify(result.errors)}`);
-  }
-  const nodes = result.data?.objects?.nodes ?? [];
+  const nodes = await queryAllSharedDeals(`${ORIGINAL_PACKAGE_ID}::deal::Deal`);
   const matches: SpecialistDeal[] = [];
   for (const node of nodes) {
     const json = node?.asMoveObject?.contents?.json as DealJson | undefined;
@@ -209,14 +275,7 @@ export async function findDealsForSpecialist(specialistAgentId: string): Promise
  * time the Deals tab mounts, so a refresh can never lose track of a deal
  * that's still genuinely in progress on-chain. */
 export async function findDealsForClient(clientAgentId: string): Promise<SpecialistDeal[]> {
-  const result = await client.query({
-    query: GetSharedDealsQuery,
-    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::Deal` },
-  });
-  if (result.errors?.length) {
-    throw new Error(`Shared Deal query failed: ${JSON.stringify(result.errors)}`);
-  }
-  const nodes = result.data?.objects?.nodes ?? [];
+  const nodes = await queryAllSharedDeals(`${ORIGINAL_PACKAGE_ID}::deal::Deal`);
   const matches: SpecialistDeal[] = [];
   for (const node of nodes) {
     const json = node?.asMoveObject?.contents?.json as DealJson | undefined;
@@ -238,14 +297,7 @@ export async function findDealsForClient(clientAgentId: string): Promise<Special
  * deal from the client side (Dashboard/ProgressView) while waiting on the
  * specialist, and again once Delivered to enable the release button. */
 export async function findDealById(dealId: string): Promise<SpecialistDeal | null> {
-  const result = await client.query({
-    query: GetSharedDealsQuery,
-    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal::Deal` },
-  });
-  if (result.errors?.length) {
-    throw new Error(`Shared Deal query failed: ${JSON.stringify(result.errors)}`);
-  }
-  const nodes = result.data?.objects?.nodes ?? [];
+  const nodes = await queryAllSharedDeals(`${ORIGINAL_PACKAGE_ID}::deal::Deal`);
   for (const node of nodes) {
     if (node?.address !== dealId) continue;
     const json = node?.asMoveObject?.contents?.json as DealJson | undefined;
@@ -331,14 +383,7 @@ interface DealAllowlistJson {
  * via a plain `deal_id` field, not Sui-level ownership (see
  * deal_access.move's DealAllowlist struct). */
 export async function findAllowlistForDeal(dealId: string): Promise<string | null> {
-  const result = await client.query({
-    query: GetSharedByTypeQuery,
-    variables: { type: `${ORIGINAL_PACKAGE_ID}::deal_access::DealAllowlist` },
-  });
-  if (result.errors?.length) {
-    throw new Error(`Shared DealAllowlist query failed: ${JSON.stringify(result.errors)}`);
-  }
-  const nodes = result.data?.objects?.nodes ?? [];
+  const nodes = await queryAllSharedByType(`${ORIGINAL_PACKAGE_ID}::deal_access::DealAllowlist`);
   for (const node of nodes) {
     const json = node?.asMoveObject?.contents?.json as DealAllowlistJson | undefined;
     if (node?.address && json?.deal_id === dealId) {
@@ -393,14 +438,7 @@ function parseExtra(raw: number[] | string): { seedId: string; file?: DealProofI
  * the client's release screen reads this to recover the exact Seal seedId
  * the specialist used, and to show the Walrus storage id. */
 export async function findProofForDeal(dealId: string): Promise<DealProofInfo | null> {
-  const result = await client.query({
-    query: GetSharedByTypeQuery,
-    variables: { type: `${ORIGINAL_PACKAGE_ID}::proof::DealProof` },
-  });
-  if (result.errors?.length) {
-    throw new Error(`Shared DealProof query failed: ${JSON.stringify(result.errors)}`);
-  }
-  const nodes = result.data?.objects?.nodes ?? [];
+  const nodes = await queryAllSharedByType(`${ORIGINAL_PACKAGE_ID}::proof::DealProof`);
   for (const node of nodes) {
     const json = node?.asMoveObject?.contents?.json as DealProofJson | undefined;
     if (node?.address && json?.deal_id === dealId) {
@@ -436,21 +474,25 @@ export interface DealCheckpointInfo {
 
 /** Finds every DealCheckpoint scoped to `dealId`, oldest first — the real
  * granular status trail a specialist pushes (see move/sources/checkpoint.move),
- * additive alongside Deal's own coarse status. checkpoint::DealCheckpoint
- * is a type introduced BY the package upgrade that added checkpoint.move,
- * so — unlike every other query in this file — this one correctly uses
- * PACKAGE_ID (the latest/upgraded id), not ORIGINAL_PACKAGE_ID; see
- * config.ts's header comment on why the two constants exist and diverge
- * after an upgrade. */
+ * additive alongside Deal's own coarse status.
+ *
+ * IMPORTANT: this must use ORIGINAL_PACKAGE_ID, not PACKAGE_ID. A struct's
+ * type is anchored to the package it was FIRST published under, forever —
+ * not wherever it happens to get compiled into on a later upgrade. This
+ * WAS correctly PACKAGE_ID back when checkpoint.move's upgrade was the
+ * only upgrade this package had ever had (so "latest package" and
+ * "package that introduced DealCheckpoint" were the same value) — but a
+ * SECOND upgrade (adding deal_brief.move) moved PACKAGE_ID forward again
+ * without moving DealCheckpoint's real anchor with it. Confirmed directly
+ * against a real on-chain transaction's objectChanges: a genuinely
+ * successful checkpoint::new_and_share call created an object typed
+ * `<original-package>::checkpoint::DealCheckpoint`, not
+ * `<latest-package>::checkpoint::DealCheckpoint` — querying the latter
+ * silently matched zero objects every time, with no error at any layer,
+ * making a specialist's real, wallet-confirmed status push look like it
+ * had done nothing at all. */
 export async function findCheckpointsForDeal(dealId: string): Promise<DealCheckpointInfo[]> {
-  const result = await client.query({
-    query: GetSharedByTypeQuery,
-    variables: { type: `${PACKAGE_ID}::checkpoint::DealCheckpoint` },
-  });
-  if (result.errors?.length) {
-    throw new Error(`Shared DealCheckpoint query failed: ${JSON.stringify(result.errors)}`);
-  }
-  const nodes = result.data?.objects?.nodes ?? [];
+  const nodes = await queryAllSharedByType(`${ORIGINAL_PACKAGE_ID}::checkpoint::DealCheckpoint`);
   const matches: DealCheckpointInfo[] = [];
   for (const node of nodes) {
     const json = node?.asMoveObject?.contents?.json as DealCheckpointJson | undefined;
@@ -466,4 +508,45 @@ export async function findCheckpointsForDeal(dealId: string): Promise<DealCheckp
     }
   }
   return matches.sort((a, b) => a.createdAtMs - b.createdAtMs);
+}
+
+interface DealBriefJson {
+  deal_id: string;
+  storage_id: string;
+  seed_id: string;
+}
+
+export interface DealBriefInfo {
+  briefId: string;
+  storageId: string;
+  seedId: string;
+}
+
+/** Finds the DealBrief scoped to `dealId`, if the client has written one
+ * — the real task brief (what the item is, where to collect/deliver it,
+ * contact details) a specialist needs to actually do the work, which
+ * nothing in deal.move's own fields ever carried (only category and
+ * amount). See move/sources/deal_brief.move's header for why this needed
+ * its own object rather than reusing DealCheckpoint or DealProof.
+ *
+ * deal_brief::DealBrief was introduced by the package's SECOND (most
+ * recent) upgrade — the same upgrade that made PACKAGE_ID point here —
+ * so PACKAGE_ID is correct for this one specifically. Do NOT use this as
+ * a template for "any type from any past upgrade uses PACKAGE_ID": a
+ * type is anchored FOREVER to whichever package first introduced it, not
+ * to "the latest package" in general — checkpoint::DealCheckpoint above
+ * is the cautionary example: it needed ORIGINAL_PACKAGE_ID once a SECOND
+ * upgrade moved PACKAGE_ID past the upgrade that introduced it. If this
+ * package is ever upgraded a third time, re-check whether DealBrief needs
+ * to move to a THIRD constant of its own rather than assuming it can stay
+ * on PACKAGE_ID indefinitely. */
+export async function findBriefForDeal(dealId: string): Promise<DealBriefInfo | null> {
+  const nodes = await queryAllSharedByType(`${PACKAGE_ID}::deal_brief::DealBrief`);
+  for (const node of nodes) {
+    const json = node?.asMoveObject?.contents?.json as DealBriefJson | undefined;
+    if (node?.address && json?.deal_id === dealId) {
+      return { briefId: node.address, storageId: json.storage_id, seedId: json.seed_id };
+    }
+  }
+  return null;
 }

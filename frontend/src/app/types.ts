@@ -139,9 +139,33 @@ export interface ChainInfo {
    * the next one, so creating leg i+1 never needs to reconstruct leg i+2's
    * brief from anywhere else. Empty on the last leg. */
   remainingLegs: { category: string; taskDescription: string }[];
+  /** User-requested stop — e.g. a leg keeps failing (a real case this
+   * session hit: the Mandate ran out of funds) and the user wants the
+   * chain to genuinely stop trying rather than sit there retrying or
+   * waiting indefinitely. Distinct from a leg simply failing on its own:
+   * this is a deliberate "end session" action, checked by
+   * chainAdvance.ts's poll gate so a manually-ended chain never
+   * auto-advances again, even after a page reload (unlike the in-memory
+   * dealsWithFailedAdvance guard, this is a real persisted field on the
+   * turn). Any already-escrowed on-chain Deal is untouched by this — it
+   * still resolves normally via the usual accept/deliver/release or
+   * timeout-refund path; this only stops the CHAT-SIDE automation from
+   * creating any further legs. */
+  ended?: boolean;
 }
 
+/** Every turn now carries a stable `id`, not just "deal" turns — using
+ * the array INDEX as React's list key (ChatPanel.tsx's turn-rendering
+ * .map) was a real bug: once `tryAdvanceChain` starts appending new
+ * turns (a summary turn, then a new deal turn) mid-session, index-based
+ * keys can misattribute a re-rendered component to the wrong turn,
+ * which is exactly the kind of thing that can silently corrupt a
+ * running DealProgress instance's closure state (its isLatestUnadvancedLeg
+ * prop, its polling interval) without throwing any visible error — the
+ * observed symptom was a chain simply stopping mid-way with no error in
+ * sight. `id` must be unique across the whole `turns` array, not just
+ * per-thread. */
 export type ConversationTurn =
-  | { kind: "text"; role: "user" | "assistant"; text: string; attachment?: AttachmentInfo; threadId: string }
+  | { kind: "text"; id: string; role: "user" | "assistant"; text: string; attachment?: AttachmentInfo; threadId: string }
   | { kind: "deal"; id: string; task: string; steps: StatusStep[]; receipt: DealReceipt | null; pending: PendingRelease | null; threadId: string; chain?: ChainInfo }
-  | { kind: "error"; text: string; threadId: string };
+  | { kind: "error"; id: string; text: string; threadId: string };

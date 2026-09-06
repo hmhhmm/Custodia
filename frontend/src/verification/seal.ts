@@ -12,7 +12,7 @@ import { SealClient, SessionKey } from "@mysten/seal";
 import type { Signer } from "@mysten/sui/cryptography";
 import { Transaction } from "@mysten/sui/transactions";
 import type { ClientWithExtensions, CoreClient } from "@mysten/sui/client";
-import { PACKAGE_ID as CUSTODIA_PACKAGE_ID } from "../sui/config";
+import { PACKAGE_ID, ORIGINAL_PACKAGE_ID } from "../sui/config";
 
 // Single-entry committee config, matching the official documented example
 // for testnet (docs.sui.io/sui-stack/seal/using-seal) rather than the
@@ -87,9 +87,20 @@ export async function encryptDealContent(
     .join("");
   const id = allowlistIdHex + nonceHex;
 
+  // Seal's SDK REQUIRES this to be the package's original (version 1)
+  // id — @mysten/seal's SessionKey.create hard-asserts
+  // `packageObj.object.version === "1"` and throws InvalidPackageError
+  // otherwise (confirmed directly in node_modules/@mysten/seal/dist/
+  // session-key.mjs; not a Custodia-side check). This is deliberate on
+  // Seal's part: an encrypted object's access-control identity is meant
+  // to stay stable across package upgrades, anchored to the package's
+  // unchanging original id — never the latest upgraded id. Using
+  // PACKAGE_ID here worked only by coincidence before this package's
+  // first-ever upgrade (when PACKAGE_ID and ORIGINAL_PACKAGE_ID were
+  // still the same value) and broke the moment a real upgrade shipped.
   const { encryptedObject, key } = await client.encrypt({
     threshold: THRESHOLD,
-    packageId: CUSTODIA_PACKAGE_ID,
+    packageId: ORIGINAL_PACKAGE_ID,
     id,
     data,
   });
@@ -113,9 +124,17 @@ export async function decryptDealContent(
 ): Promise<Uint8Array> {
   const client = createSealClient(suiClient);
 
+  // Must be ORIGINAL_PACKAGE_ID, matching encryptDealContent's packageId
+  // exactly — Seal's own fetchKeys builds the key-server request id as
+  // createFullId(sessionKey.getPackageId(), id) (see node_modules/@mysten/
+  // seal/dist/client.mjs), NOT from anything read out of the ciphertext
+  // itself, so a mismatch here silently asks the key server for the WRONG
+  // identity rather than throwing. SessionKey.create also independently
+  // hard-requires a version-1 package (same InvalidPackageError as
+  // encrypt) — PACKAGE_ID (the latest upgraded id) fails both of these.
   const sessionKey = await SessionKey.create({
     address: signer.toSuiAddress(),
-    packageId: CUSTODIA_PACKAGE_ID,
+    packageId: ORIGINAL_PACKAGE_ID,
     ttlMin: 10,
     suiClient,
   });
@@ -127,9 +146,15 @@ export async function decryptDealContent(
   // Buffer does not exist.
   const idBytes = hexToBytes(seedId);
 
+  // Unlike packageId above, THIS must stay on PACKAGE_ID (the latest) —
+  // it's a real moveCall the key servers dry-run against actually
+  // deployed bytecode, not part of Seal's identity namespace. deal_access
+  // itself hasn't changed since the original publish, so PACKAGE_ID and
+  // ORIGINAL_PACKAGE_ID currently resolve the same call either way, but
+  // PACKAGE_ID is the semantically correct one for a function call.
   const tx = new Transaction();
   tx.moveCall({
-    target: `${CUSTODIA_PACKAGE_ID}::deal_access::seal_approve`,
+    target: `${PACKAGE_ID}::deal_access::seal_approve`,
     arguments: [tx.pure.vector("u8", Array.from(idBytes)), tx.object(dealAllowlistObjectId)],
   });
   const txBytes = await tx.build({ client: suiClient, onlyTransactionKind: true });

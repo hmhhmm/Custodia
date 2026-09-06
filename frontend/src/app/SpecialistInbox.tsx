@@ -10,12 +10,13 @@
 
 import { useEffect, useState } from "react";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
-import { findOwnedAgentIdentities } from "../sui/onboarding-status";
+import { findOwnedAgentIdentities, findReputationScores, type ReputationInfo } from "../sui/onboarding-status";
 import {
   findDealsForSpecialist,
   findAllowlistForDeal,
   findDealMetadata,
   findCheckpointsForDeal,
+  findBriefForDeal,
   type SpecialistDeal,
   type DealMetadata,
   type DealCheckpointInfo,
@@ -40,15 +41,20 @@ import { formatDateTime } from "./ProgressView";
 // label in each list is the one that also finalizes delivery (calls
 // mark_delivered in the same action) — see CheckpointFlow's
 // isFinalCheckpoint logic below.
+//
+// Two stages per category, not three — the middle "en route"/"in
+// progress" checkpoint was cut per explicit feedback: a real specialist
+// pushing status from the field wants "started" and "done", not a
+// mid-point update that mostly just adds an extra required tap.
 const CHECKPOINT_LABELS: Record<string, string[]> = {
-  logistics: ["Picked up", "En route", "Arrived"],
-  courier: ["Picked up", "En route", "Delivered"],
-  research: ["Inspection started", "Work in progress", "Complete"],
-  design: ["Draft started", "Draft ready for review", "Final delivered"],
-  "legal-review": ["Review started", "Findings drafted", "Review complete"],
-  translation: ["Translation started", "Draft ready", "Final delivered"],
+  logistics: ["Picked up", "Arrived"],
+  courier: ["Picked up", "Delivered"],
+  research: ["Inspection started", "Complete"],
+  design: ["Draft started", "Final delivered"],
+  "legal-review": ["Review started", "Review complete"],
+  translation: ["Translation started", "Final delivered"],
 };
-const DEFAULT_CHECKPOINT_LABELS = ["Started", "In progress", "Complete"];
+const DEFAULT_CHECKPOINT_LABELS = ["Started", "Complete"];
 
 function checkpointLabelsFor(category: string | undefined): string[] {
   return (category && CHECKPOINT_LABELS[category]) || DEFAULT_CHECKPOINT_LABELS;
@@ -78,7 +84,8 @@ interface InboxDeal {
 export function SpecialistInbox() {
   const account = useCurrentAccount();
 
-  const [agents, setAgents] = useState<RegisteredAgent[] | "loading">("loading");
+  const [agents, setAgents] = useState<(RegisteredAgent & { capabilities: string[] })[] | "loading">("loading");
+  const [reputationByAgent, setReputationByAgent] = useState<Map<string, ReputationInfo>>(new Map());
   const [deals, setDeals] = useState<InboxDeal[]>([]);
   const [metadataByDeal, setMetadataByDeal] = useState<Map<string, DealMetadata>>(new Map());
   const [dealsStatus, setDealsStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -106,6 +113,26 @@ export function SpecialistInbox() {
       cancelled = true;
     };
   }, [account]);
+
+  // Real reputation score per registered identity — batch-read from the
+  // shared Reputation objects (agent_identity.move shares one per
+  // registration, see onboarding-status.ts's findReputationScores) —
+  // never fabricated or hardcoded to 0.
+  useEffect(() => {
+    if (agents === "loading" || agents.length === 0) return;
+    let cancelled = false;
+    findReputationScores(agents.map((a) => a.reputationId))
+      .then((found) => {
+        if (!cancelled) setReputationByAgent(found);
+      })
+      .catch(() => {
+        // Transient GraphQL hiccup — leave whatever was last successfully
+        // loaded rather than blanking scores that were already shown.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agents]);
 
   useEffect(() => {
     if (agents === "loading") return;
@@ -172,6 +199,12 @@ export function SpecialistInbox() {
   // deal at once, the grid below still shows every deal regardless — this
   // just picks the most urgent one (soonest deadline, same sort the list
   // already uses) to feature.
+  // Strictly "Accepted" — the moment the final checkpoint's mark_delivered
+  // call confirms on-chain, deal.status genuinely moves past this, and the
+  // NEXT poll (onChanged() triggers one immediately, not just the regular
+  // 6s interval) picks the deal out of the active-job card and into the
+  // ordinary grid below as Delivered/Released. No client-side "still
+  // finishing up" override — this always reflects the real on-chain status.
   const activeJob = deals.find(({ deal }) => deal.status === "Accepted");
   const otherDeals = activeJob ? deals.filter(({ deal }) => deal.dealId !== activeJob.deal.dealId) : deals;
 
@@ -184,6 +217,8 @@ export function SpecialistInbox() {
           connected wallet, not a shared demo key.
         </p>
       </div>
+
+      {agents.length > 0 && <IdentitySummary agents={agents} reputationByAgent={reputationByAgent} />}
 
       {dealsStatus === "ready" && deals.length > 0 && (
         <EarningsSummary deals={deals.map((d) => d.deal)} metadataByDeal={metadataByDeal} />
@@ -246,6 +281,57 @@ export function SpecialistInbox() {
  * balance over released deals is mathematically guaranteed to total 0
  * regardless of how much was actually earned — this was a real bug, not
  * a display nicety, and it's what made "Total earned" always read 0. */
+
+/** Shows this wallet its own registered role(s) and real reputation
+ * score(s) — a specialist could previously see a CANDIDATE's score during
+ * client-side matching (discovery.ts) but never their own, on their own
+ * inbox. A wallet can hold more than one AgentIdentity (registered under
+ * different categories across test runs), so this renders one row per
+ * identity rather than assuming exactly one. */
+function IdentitySummary({
+  agents,
+  reputationByAgent,
+}: {
+  agents: (RegisteredAgent & { capabilities: string[] })[];
+  reputationByAgent: Map<string, ReputationInfo>;
+}) {
+  return (
+    <div className="mb-6 flex flex-col gap-2">
+      {agents.map((agent) => {
+        const rep = reputationByAgent.get(agent.reputationId);
+        return (
+          <div
+            key={agent.agentId}
+            className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3"
+          >
+            <div className="flex flex-wrap gap-1.5">
+              {agent.capabilities.map((cap) => (
+                <span
+                  key={cap}
+                  className="rounded-full border border-border px-2.5 py-0.5 text-xs font-medium text-vellum"
+                >
+                  {cap}
+                </span>
+              ))}
+            </div>
+            <span className="text-manifest">·</span>
+            {rep ? (
+              <span className="text-sm text-vellum">
+                Reputation <span className="font-semibold">{rep.score}</span>
+                <span className="ml-1.5 text-xs text-manifest">
+                  ({rep.completedDeals} completed{rep.disputedDeals > 0 ? `, ${rep.disputedDeals} disputed` : ""})
+                </span>
+              </span>
+            ) : (
+              <span className="text-sm text-manifest">Loading reputation…</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function EarningsSummary({
   deals,
   metadataByDeal,
@@ -264,7 +350,7 @@ function EarningsSummary({
     <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
       <div className="rounded-xl border border-border bg-surface p-5">
         <p className="text-xs uppercase tracking-wide text-manifest">Total earned</p>
-        <p className="mt-1.5 text-2xl font-semibold tracking-tight text-emerald-400">{mistToSui(totalMist)}</p>
+        <p className="mt-1.5 text-2xl font-semibold tracking-tight text-vellum">{mistToSui(totalMist)}</p>
         <p className="mt-1 text-xs text-manifest">
           From {paid.length} released {paid.length === 1 ? "deal" : "deals"}
         </p>
@@ -329,9 +415,9 @@ function DealCard({
   const statusTone: Record<string, string> = {
     Escrowed: "border-border text-manifest",
     Accepted: "border-accent/40 text-accent",
-    Delivered: "border-emerald-500/40 text-emerald-400",
-    Verified: "border-emerald-500/40 text-emerald-400",
-    Released: "border-emerald-500/40 text-emerald-400",
+    Delivered: "border-border text-vellum",
+    Verified: "border-border text-vellum",
+    Released: "border-border text-vellum",
   };
 
   return (
@@ -371,7 +457,7 @@ function DealCard({
       {(deal.status === "Delivered" || deal.status === "Verified") && (
         <div className="border-t border-border p-5">
           <p className="flex items-center gap-2 text-sm text-vellum">
-            <span className="text-emerald-500">✓</span>
+            <span className="text-vellum">✓</span>
             Delivered
           </p>
           <p className="mt-1 text-sm text-manifest">Waiting on the client to verify and release payment.</p>
@@ -381,7 +467,7 @@ function DealCard({
       {(deal.status === "Released" || deal.status === "Settled") && (
         <div className="border-t border-border p-5">
           <p className="flex items-center gap-2 text-sm text-vellum">
-            <span className="text-emerald-500">✓</span>
+            <span className="text-vellum">✓</span>
             Paid
           </p>
           <p className="mt-1 text-sm text-manifest">
@@ -438,9 +524,75 @@ function ActiveJobScreen({
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // the label being pushed, or null
   const [error, setError] = useState<string | null>(null);
+  // The real task brief (what the item is, where to collect/deliver it,
+  // contact details) — written by the client at escrow time (see
+  // orchestrator.ts's new "write the specialist's actual work order"
+  // step) and never shown here before, which was the exact "specialist
+  // doesn't know where to collect" gap reported live. Decrypted with the
+  // CONNECTED wallet's own signature — a genuine user action reading a
+  // real Deal-scoped secret, same pattern Receipt.tsx already uses for
+  // the deliverable, just the brief instead of the proof.
+  const [brief, setBrief] = useState<"loading" | "none" | "locked" | string>("loading");
 
   const displayAmountMist = metadata?.amountMist ?? deal.escrowedAmountMist;
   const labels = checkpointLabelsFor(metadata?.category);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBrief("loading");
+
+    async function load() {
+      try {
+        const found = await findBriefForDeal(deal.dealId);
+        if (cancelled) return;
+        if (!found) {
+          setBrief("none");
+          return;
+        }
+        const allowlistId = await findAllowlistForDeal(deal.dealId);
+        if (cancelled) return;
+        if (!allowlistId) {
+          setBrief("locked");
+          return;
+        }
+        const encrypted = await readBlob(found.storageId);
+        const signer = new CurrentAccountSigner(dAppKitSingleton as unknown as DAppKit);
+        const decrypted = await decryptDealContent(encrypted, dAppKitSingleton.getClient(), allowlistId, found.seedId, signer);
+        if (!cancelled) setBrief(new TextDecoder().decode(decrypted));
+      } catch (err) {
+        console.error("brief decrypt failed for", deal.dealId, err);
+        if (!cancelled) setBrief("locked");
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [deal.dealId]);
+
+  // Real re-fetch, not a one-shot on mount — a component-scoped `useEffect`
+  // keyed only on `deal.dealId` ran ONCE and never again for the lifetime
+  // of this screen, so every push after the first computed `pushedLabels`/
+  // `nextLabel`/`isFinalCheckpoint` from an increasingly stale snapshot.
+  // That's exactly what let a specialist push every checkpoint including
+  // the visually-final one, see "delivered" in the UI, and yet
+  // mark_delivered NEVER actually fire — isFinalCheckpoint at click time
+  // was computed against a checkpoints array that didn't yet include the
+  // checkpoints pushed moments earlier in the same session, so the real
+  // last click didn't register as the real last label. loadCheckpoints is
+  // now callable on demand (after every successful push), not just once.
+  function loadCheckpoints() {
+    return findCheckpointsForDeal(deal.dealId)
+      .then((found) => {
+        setCheckpoints(found);
+        return found;
+      })
+      .catch(() => {
+        setCheckpoints([]);
+        return [] as DealCheckpointInfo[];
+      });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -503,7 +655,24 @@ function ActiveJobScreen({
       if (result.FailedTransaction) {
         throw new Error(result.FailedTransaction.status.error?.message ?? "checkpoint::new_and_share failed");
       }
+      // Confirms the transaction executed on the gRPC full node — it does
+      // NOT guarantee the SEPARATE GraphQL indexer findCheckpointsForDeal
+      // reads from has caught up yet (two different backends, no shared
+      // read-after-write guarantee — see the accessing-data skill's rule
+      // on this exact mistake). The retry below is a safety margin for
+      // that ordinary propagation delay — it is NOT what fixed the
+      // earlier "push always reads back as not found" bug; that was
+      // findCheckpointsForDeal querying DealCheckpoint under the wrong
+      // package id entirely (see its own comment in deal-queries.ts).
       await dAppKit.getClient().core.waitForTransaction({ result });
+
+      let freshCheckpoints = await loadCheckpoints();
+      for (let attempt = 0; attempt < 5 && !freshCheckpoints.some((c) => c.label === label); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        freshCheckpoints = await loadCheckpoints();
+      }
+      const freshPushedLabels = new Set(freshCheckpoints.map((c) => c.label));
+      const isActuallyFinal = labels.every((l) => freshPushedLabels.has(l) || l === label) && label === labels[labels.length - 1];
 
       // The final checkpoint in this category's list ALSO finalizes
       // delivery — same real mark_delivered flow this file already had,
@@ -511,7 +680,7 @@ function ActiveJobScreen({
       // the client's release screen still finds a real DealProof exactly
       // as before. Checkpoints are additive alongside it, never a
       // replacement for the on-chain proof mark_delivered records.
-      if (isFinalCheckpoint) {
+      if (isActuallyFinal) {
         const textContent = new TextEncoder().encode(note || `(no written notes — see attached photo: ${file?.name ?? "none"})`);
         const encryptedText = await encryptDealContent(textContent, dAppKit.getClient(), allowlistId);
         const storedText = await storeBlob(encryptedText.encryptedObject);
@@ -556,7 +725,19 @@ function ActiveJobScreen({
           <p className="mt-1 text-sm text-vellum">{metadata?.category ?? "—"}</p>
           <p className="mt-1.5 text-2xl font-semibold tracking-tight text-vellum">{mistToSui(displayAmountMist)}</p>
         </div>
-        <span className="shrink-0 rounded-full border border-accent/40 px-2.5 py-1 text-xs text-accent">In progress</span>
+        <span className="shrink-0 rounded-full border border-border px-2.5 py-1 text-xs text-manifest">{deal.status}</span>
+      </div>
+
+      <div className="border-t border-border p-5">
+        <p className="mb-2 text-sm font-medium text-vellum">Task brief</p>
+        {brief === "loading" && <p className="text-sm text-manifest">Loading…</p>}
+        {brief === "none" && (
+          <p className="text-sm text-manifest">The client didn't attach a written brief for this deal.</p>
+        )}
+        {brief === "locked" && <p className="text-sm text-wax">Couldn't decrypt the brief right now — try refreshing.</p>}
+        {brief !== "loading" && brief !== "none" && brief !== "locked" && (
+          <p className="whitespace-pre-wrap text-sm text-vellum">{brief}</p>
+        )}
       </div>
 
       <div className="border-t border-border p-5">
@@ -631,7 +812,7 @@ function ActiveJobScreen({
                   title={done ? "Already pushed" : !isNext ? "Push the previous update first" : undefined}
                   className={`rounded-md px-4 py-2 text-sm font-medium transition-opacity disabled:cursor-not-allowed ${
                     done
-                      ? "border border-emerald-500/40 text-emerald-400 opacity-60"
+                      ? "border border-border text-vellum opacity-60"
                       : isNext
                         ? "bg-white text-black hover:opacity-90"
                         : "border border-border text-manifest opacity-40"
@@ -648,7 +829,7 @@ function ActiveJobScreen({
       {!nextLabel && (
         <div className="border-t border-border p-5">
           <p className="flex items-center gap-2 text-sm text-vellum">
-            <span className="text-emerald-500">✓</span>
+            <span className="text-vellum">✓</span>
             All status updates pushed — delivered.
           </p>
           <p className="mt-1 text-sm text-manifest">Waiting on the client to verify and release payment.</p>
@@ -709,7 +890,7 @@ function CheckpointRow({
 
   return (
     <div className="flex gap-3">
-      <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+      <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-vellum" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-3">
           <p className="text-sm text-vellum">{checkpoint.label}</p>

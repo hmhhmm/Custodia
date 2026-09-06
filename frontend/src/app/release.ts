@@ -57,12 +57,28 @@ async function fetchBalanceMist(owner: string): Promise<bigint> {
   return BigInt(result.balance.balance);
 }
 
-export async function releaseDeal(pending: PendingRelease): Promise<DealReceipt> {
+export type ReleaseProgressStage =
+  | "checking-proof"
+  | "reading-balance-before"
+  | "signing"
+  | "confirming"
+  | "verifying-balance";
+
+/** `onProgress`, when given, is called once per real stage below — no
+ * stage here is an LLM call (this file never touches Gemini); every one
+ * is a real on-chain read or the release transaction's own signing/
+ * confirmation, so the wait a user sees on "Verify & Release Payment" is
+ * blockchain confirmation time, never a hidden AI step. Surfacing that
+ * distinction was explicit feedback: the button previously showed a bare
+ * "Releasing…" for however long all four stages took combined. */
+export async function releaseDeal(pending: PendingRelease, onProgress?: (stage: ReleaseProgressStage) => void): Promise<DealReceipt> {
+  onProgress?.("checking-proof");
   const proof = await findProofForDeal(pending.dealId);
   if (!proof) {
     throw new Error("No delivery proof found for this deal yet — the specialist hasn't marked it delivered.");
   }
 
+  onProgress?.("reading-balance-before");
   const balanceBefore = await fetchBalanceMist(pending.specialistOwnerAddress);
 
   const tx = buildVerifyAndReleaseTx({
@@ -71,14 +87,17 @@ export async function releaseDeal(pending: PendingRelease): Promise<DealReceipt>
     clientReputationId: pending.clientReputationId,
     specialistReputationId: pending.specialistReputationId,
   });
+  onProgress?.("signing");
   const result = await envoyKeypair.signAndExecuteTransaction({ transaction: tx, client: dAppKit.getClient() });
   if (result.FailedTransaction) {
     throw new Error(result.FailedTransaction.status.error?.message ?? "verify_and_release() failed");
   }
+  onProgress?.("confirming");
   await dAppKit.getClient().core.waitForTransaction({ result });
 
   // Real proof payment landed, not just "the tx didn't abort" — read the
   // specialist's balance again and require it to have actually increased.
+  onProgress?.("verifying-balance");
   const balanceAfter = await fetchBalanceMist(pending.specialistOwnerAddress);
   if (balanceAfter <= balanceBefore) {
     throw new Error(

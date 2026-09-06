@@ -17,11 +17,12 @@ import { sendChatTurn, type ChatMessage, type ChatAttachment } from "../agent/ch
 import { createDealAndEscrow, createDealChain } from "./orchestrator";
 import { releaseDeal, reconstructPendingRelease } from "./release";
 import { tryAdvanceChain } from "./chainAdvance";
-import { findDealById, findProofForDeal, type DealStatusName } from "../sui/deal-queries";
+import { findDealById, findProofForDeal, findCheckpointsForDeal, type DealStatusName, type DealCheckpointInfo } from "../sui/deal-queries";
 import type { OnboardingResult } from "./Onboarding";
 import type { AttachmentInfo, ChainInfo, ConversationTurn, DealReceipt, PendingRelease, StatusStep } from "./types";
 import { GENERAL_THREAD_ID } from "./types";
 import { StepList } from "./StatusFeed";
+import { formatDateTime } from "./ProgressView";
 import { Markdown } from "./components/Markdown";
 import { ChatThreadSidebar, deriveThreads } from "./ChatThreadSidebar";
 
@@ -221,6 +222,32 @@ export function ChatPanel({
     setPendingFile(null);
   }
 
+  // "New chat" previously only switched TO General — a no-op with no
+  // visible effect when already viewing General, which is exactly what
+  // made it look broken/unresponsive. Now it actually starts fresh: only
+  // General's own turns are cleared (deal threads are untouched — they're
+  // real on-chain history, not something a "new chat" click should ever
+  // discard), and the view is switched to General so the input is
+  // immediately ready for a genuinely new conversation.
+  function handleNewChat() {
+    onTurnsChange((prev) => prev.filter((t) => t.threadId !== GENERAL_THREAD_ID));
+    onSelectThread(GENERAL_THREAD_ID);
+  }
+
+  // Removes a thread from THIS device's local chat history only — see
+  // ChatThreadSidebar.tsx's ThreadRow comment on why any escrowed Deal
+  // behind it is completely unaffected (Sui objects are permanent; this
+  // is local UI state, same honesty convention as deal-local-meta.ts's
+  // hide feature). If the deleted thread was the one currently open,
+  // falls back to General so the view is never left pointing at a
+  // thread that no longer has any turns.
+  function handleDeleteThread(threadId: string) {
+    onTurnsChange((prev) => prev.filter((t) => t.threadId !== threadId));
+    if (activeThreadId === threadId) {
+      onSelectThread(GENERAL_THREAD_ID);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     const trimmed = input.trim();
@@ -248,7 +275,7 @@ export function ChatPanel({
     // after the fact, so there's no way to know the real thread up front.
     onTurnsChange((prev) => [
       ...prev,
-      { kind: "text", role: "user", text: sentText, attachment: turnAttachment, threadId: activeThreadId },
+      { kind: "text", id: crypto.randomUUID(), role: "user", text: sentText, attachment: turnAttachment, threadId: activeThreadId },
     ]);
     setBusy(true);
 
@@ -259,7 +286,10 @@ export function ChatPanel({
       ]);
 
       if (result.kind === "reply") {
-        onTurnsChange((prev) => [...prev, { kind: "text", role: "assistant", text: result.text, threadId: activeThreadId }]);
+        onTurnsChange((prev) => [
+          ...prev,
+          { kind: "text", id: crypto.randomUUID(), role: "assistant", text: result.text, threadId: activeThreadId },
+        ]);
         setBusy(false);
         return;
       }
@@ -273,16 +303,24 @@ export function ChatPanel({
         // synchronous call anymore. Once escrowed, the Deals tab takes
         // over (polls live status, shows the Verify & Release button).
         const dealId = crypto.randomUUID();
-        // Move the triggering message into this deal's own thread (see
-        // the header note above) and add the deal turn under the same
-        // thread — this is what makes "one thread per deal" real:
-        // everything about this deal, including the message that started
-        // it, lives together.
+        // Move EVERY turn currently in the active thread into this deal's
+        // own thread — not just the one message matching sentText by
+        // exact text. That narrower match was a real bug: once a
+        // clarifying question is involved (see the system instruction in
+        // agent/chat.ts), the message that actually triggers start_deal
+        // is the user's REPLY to that question, not their original
+        // request — matching only sentText left the original request
+        // permanently stranded in General as its own orphaned,
+        // untitled-looking thread while the reply alone moved to the new
+        // deal thread. Sweeping the whole active thread's history in is
+        // correct because a clarifying round-trip always happens within
+        // the SAME thread before a deal starts — only do this when that
+        // thread is General, though: if the user was mid-conversation in
+        // an existing deal's thread, its unrelated history must not be
+        // swept into a brand-new one.
         onTurnsChange((prev) => [
           ...prev.map((t) =>
-            t.kind === "text" && t.threadId === activeThreadId && t.text === sentText && t.role === "user"
-              ? { ...t, threadId: dealId }
-              : t,
+            activeThreadId === GENERAL_THREAD_ID && t.threadId === activeThreadId ? { ...t, threadId: dealId } : t,
           ),
           { kind: "deal", id: dealId, task: result.task, steps: [], receipt: null, pending: null, threadId: dealId },
         ]);
@@ -309,6 +347,7 @@ export function ChatPanel({
             ...prev,
             {
               kind: "text",
+              id: crypto.randomUUID(),
               role: "assistant",
               text: `That didn't go through: ${err instanceof Error ? err.message : String(err)}`,
               threadId: dealId,
@@ -333,12 +372,15 @@ export function ChatPanel({
         legTotal: result.legs.length,
         remainingLegs: result.legs.slice(1),
       };
+      // Same fix as start_deal above: sweep EVERY turn from the active
+      // thread (only when it's General) into the new chain thread, not
+      // just the one message matching sentText — a clarifying-question
+      // round-trip means the message that actually triggers
+      // start_deal_chain is the user's reply, not their original
+      // request, and matching only that reply stranded the original
+      // request in General as its own orphaned thread.
       onTurnsChange((prev) => [
-        ...prev.map((t) =>
-          t.kind === "text" && t.threadId === activeThreadId && t.text === sentText && t.role === "user"
-            ? { ...t, threadId: chainId }
-            : t,
-        ),
+        ...prev.map((t) => (activeThreadId === GENERAL_THREAD_ID && t.threadId === activeThreadId ? { ...t, threadId: chainId } : t)),
         { kind: "deal", id: chainId, task: leg0.taskDescription, steps: [], receipt: null, pending: null, threadId: chainId, chain },
       ]);
       // The chain's thread is titled from the ORIGINAL multi-phase
@@ -363,6 +405,7 @@ export function ChatPanel({
           ...prev,
           {
             kind: "text",
+            id: crypto.randomUUID(),
             role: "assistant",
             text: `That didn't go through: ${err instanceof Error ? err.message : String(err)}`,
             threadId: chainId,
@@ -373,7 +416,7 @@ export function ChatPanel({
     } catch (err) {
       onTurnsChange((prev) => [
         ...prev,
-        { kind: "error", text: err instanceof Error ? err.message : String(err), threadId: activeThreadId },
+        { kind: "error", id: crypto.randomUUID(), text: err instanceof Error ? err.message : String(err), threadId: activeThreadId },
       ]);
       setBusy(false);
     }
@@ -482,8 +525,9 @@ export function ChatPanel({
           turns={turns}
           activeThreadId={activeThreadId}
           onSelectThread={onSelectThread}
-          onNewChat={() => onSelectThread(GENERAL_THREAD_ID)}
+          onNewChat={handleNewChat}
           onCollapse={() => setSidebarHidden(true)}
+          onDeleteThread={handleDeleteThread}
         />
       )}
       <LayoutGroup>
@@ -519,7 +563,7 @@ export function ChatPanel({
                   <div className="flex flex-col gap-5 py-6">
                     {threadTurns.map((turn, i) => (
                       <motion.div
-                        key={i}
+                        key={turn.id}
                         layout
                         initial={{ opacity: 0, y: 8 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -547,16 +591,37 @@ export function ChatPanel({
                               // Only the LATEST leg of its chain should ever
                               // poll to advance the chain — otherwise every
                               // resolved earlier leg would independently
-                              // try to create the next one too, racing
-                              // itself. "Latest" is computed here (where
-                              // the full turns array is in scope) rather
-                              // than inside DealProgress, so a duplicate
-                              // advance is structurally prevented rather
-                              // than merely debounced.
+                              // try to create the next one too. This is a
+                              // presentational hint only, NOT the real
+                              // race guard — a plain boolean derived from
+                              // `turns` can't reliably be one, since every
+                              // mounted component instance (including
+                              // stale/duplicate ones) recomputes it
+                              // independently with no shared "someone's
+                              // already doing this" signal between them.
+                              // The actual guard against duplicate advance
+                              // is chainAdvance.ts's chainsCurrentlyAdvancing
+                              // module-level lock, held for a chain's
+                              // entire advance regardless of which/how many
+                              // component instances call in — that's what
+                              // makes it now SAFE for this hint to be
+                              // permissive: a later leg only counts as
+                              // "the chain has moved on" once it actually
+                              // escrowed (pending set), not merely exists
+                              // as a turn, so a dead/failed duplicate leg
+                              // (e.g. from the exact race the lock now
+                              // prevents) can never permanently block the
+                              // real leg from polling and retrying again —
+                              // the lock, not this heuristic, is what
+                              // stops that retry from ALSO racing.
                               isLatestUnadvancedLeg={
                                 !!turn.chain &&
                                 !turns.some(
-                                  (t) => t.kind === "deal" && t.chain?.chainId === turn.chain!.chainId && t.chain.legIndex > turn.chain!.legIndex,
+                                  (t) =>
+                                    t.kind === "deal" &&
+                                    t.chain?.chainId === turn.chain!.chainId &&
+                                    t.chain.legIndex > turn.chain!.legIndex &&
+                                    t.pending !== null,
                                 )
                               }
                               connectedAddress={connectedAddress}
@@ -611,13 +676,16 @@ const LIVE_STATUS_STEP_INDEX: Partial<Record<DealStatusName, number>> = {
 // amount info the reconstructed PendingRelease carries — "add more info,
 // no need to compact it" was explicit feedback, so these read as a real
 // status log rather than a terse label once escrow has locked.
-function liveStatusDetail(status: DealStatusName, pending: PendingRelease): string {
+function liveStatusDetail(status: DealStatusName, pending: PendingRelease, latestCheckpoint?: DealCheckpointInfo): string {
   const amount = pending.amountSui.toFixed(4);
   switch (status) {
     case "Escrowed":
       return `${amount} SUI is locked in escrow, waiting for ${pending.counterpartyName} to accept the offer from their own specialist inbox. Nothing moves until they do — if they never accept, the escrow refunds back to the Mandate once the delivery window lapses.`;
-    case "Accepted":
-      return `${pending.counterpartyName} accepted the offer with their own wallet signature and is now working on the delivery. ${amount} SUI stays locked in escrow until they mark it delivered and it's verified.`;
+    case "Accepted": {
+      const base = `${pending.counterpartyName} accepted the offer with their own wallet signature and is now working on the delivery. ${amount} SUI stays locked in escrow until they mark it delivered and it's verified.`;
+      if (!latestCheckpoint) return base;
+      return `${base} Latest update: "${latestCheckpoint.label}"${latestCheckpoint.note ? ` — ${latestCheckpoint.note}` : ""} (${formatDateTime(latestCheckpoint.createdAtMs)}).`;
+    }
     case "Delivered":
       return `${pending.counterpartyName} marked the work delivered and uploaded proof (Seal-encrypted, stored on Walrus). Ready to verify and release — click below to confirm delivery and pay out the ${amount} SUI.`;
     case "Verified":
@@ -631,15 +699,25 @@ function liveStatusDetail(status: DealStatusName, pending: PendingRelease): stri
   }
 }
 
-/** Small label above a DealProgress card that's one leg of a multi-agent
- * chain — "Part 2 of 3 · repair the laptop" — so the reader immediately
- * understands this is one step of a larger sequence, not a standalone
- * deal. Purely presentational; rendered only when turn.chain is set. */
+/** A clear divider marking the handoff into one leg of a multi-agent
+ * chain — deliberately more prominent than a small label, since a leg's
+ * full step-by-step log (searching, negotiating, escrow...) appearing
+ * right after the previous leg's card otherwise reads as noise piling up
+ * rather than a deliberate "now starting the next step" moment. Only the
+ * FIRST leg (index 0) skips this — that one is the direct result of the
+ * user's own message, not a handoff from anything prior. */
 function ChainLegHeader({ legIndex, legTotal, task }: { legIndex: number; legTotal: number; task: string }) {
+  if (legIndex === 0) {
+    return <p className="mb-1.5 text-xs uppercase tracking-wide text-manifest">Part 1 of {legTotal} · {task}</p>;
+  }
   return (
-    <p className="mb-1.5 text-xs uppercase tracking-wide text-manifest">
-      Part {legIndex + 1} of {legTotal} · {task}
-    </p>
+    <div className="mb-3 mt-1 flex items-center gap-3">
+      <span className="h-px flex-1 bg-border" />
+      <p className="shrink-0 text-xs uppercase tracking-wide text-manifest">
+        Part {legIndex + 1} of {legTotal} — starting next step
+      </p>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 
@@ -700,8 +778,23 @@ function DealProgress({
   const [expanded, setExpanded] = useState(true);
   const [autoCollapsed, setAutoCollapsed] = useState(false);
   const [liveStatus, setLiveStatus] = useState<DealStatusName | null>(null);
+  // The granular specialist-pushed trail (e.g. "Picked up" -> "Arrived")
+  // — without this, Chat only ever showed the coarse Escrowed/Accepted/
+  // Delivered stage labels and sat on a single frozen "Waiting for the
+  // specialist to accept & deliver" line for the entire delivery window,
+  // even while the specialist was actively pushing real checkpoints that
+  // ProgressView already displayed live. Same data source, same poll
+  // cadence as ProgressView's own CheckpointItem trail, so the two views
+  // can never disagree.
+  const [checkpoints, setCheckpoints] = useState<DealCheckpointInfo[]>([]);
   const [releasing, setReleasing] = useState(false);
   const [releaseError, setReleaseError] = useState<string | null>(null);
+  // Set the instant releaseDeal() resolves, but deliberately NOT the
+  // same thing as `receipt` (the prop) — this only becomes the App-level
+  // receipt (which pops the modal card open) once the user clicks "View
+  // receipt" below, so release finishing doesn't yank a card open on top
+  // of whatever the user is doing.
+  const [readyReceipt, setReadyReceipt] = useState<DealReceipt | null>(null);
   const [reconstructedPending, setReconstructedPending] = useState<PendingRelease | null>(null);
 
   const failed = steps.some((s) => s.state === "failed");
@@ -735,12 +828,14 @@ function DealProgress({
   }, [pending, dealIdFromSteps, reconstructedPending]);
 
   useEffect(() => {
-    if (!effectivePending || receipt) return;
+    if (!effectivePending || receipt || readyReceipt) return;
     let cancelled = false;
 
     async function poll() {
       try {
+        console.log("[DealProgress] polling", { dealId: effectivePending!.dealId, chain, isLatestUnadvancedLeg });
         const deal = await findDealById(effectivePending!.dealId);
+        console.log("[DealProgress] poll result", { dealId: effectivePending!.dealId, status: deal?.status });
         if (!cancelled && deal) setLiveStatus(deal.status);
       } catch (err) {
         // Transient GraphQL hiccup — next poll tick will retry. Logged
@@ -748,6 +843,12 @@ function DealProgress({
         // previously looked identical to "the chat status is wrong,"
         // when the real cause could be every fetch quietly failing.
         console.error("DealProgress poll failed for", effectivePending!.dealId, err);
+      }
+      try {
+        const found = await findCheckpointsForDeal(effectivePending!.dealId);
+        if (!cancelled) setCheckpoints(found);
+      } catch (err) {
+        console.error("DealProgress checkpoint poll failed for", effectivePending!.dealId, err);
       }
     }
 
@@ -806,14 +907,32 @@ function DealProgress({
   // principle as reconstructPendingRelease and the self-heal effect
   // above — so a page refresh mid-chain cannot strand it.
   useEffect(() => {
-    if (!chain || !isLatestUnadvancedLeg || !effectivePending) return;
+    console.log("[chainAdvance] gate check", { chain, isLatestUnadvancedLeg, effectivePending });
+    if (!chain || chain.ended || !isLatestUnadvancedLeg || !effectivePending) return;
     let cancelled = false;
+    // A single call to tryAdvanceChain involves several sequential async
+    // steps (decrypt proof, a real Gemini summarization call, then a
+    // full build-sign-wait escrow transaction for the next leg) that can
+    // easily take longer than POLL_INTERVAL_MS combined. Without this
+    // guard, setInterval fires the NEXT poll tick before the first one
+    // has appended the new leg turn to `turns` — both ticks see the same
+    // stale "no next leg yet" state and both think they're the one that
+    // should create it, producing two duplicate leg turns (the exact bug
+    // reported: "Part 2 of 3" appearing twice). isLatestUnadvancedLeg
+    // alone can't prevent this — it's computed from `turns`, which
+    // doesn't change until the FIRST call's onTurnsChange actually runs.
+    let inFlight = false;
 
     async function poll() {
+      if (inFlight) return;
+      inFlight = true;
       try {
+        console.log("[chainAdvance] polling tryAdvanceChain for", effectivePending!.dealId);
         await tryAdvanceChain({ task, threadId, pending: effectivePending!, chain: chain! }, connectedAddress, onboarding, onTurnsChange);
       } catch (err) {
         if (!cancelled) console.error("DealProgress chain-advance failed for", effectivePending!.dealId, err);
+      } finally {
+        inFlight = false;
       }
     }
 
@@ -824,7 +943,7 @@ function DealProgress({
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chain, isLatestUnadvancedLeg, effectivePending, connectedAddress, onboarding, onTurnsChange]);
+  }, [chain, isLatestUnadvancedLeg, effectivePending, connectedAddress, onboarding, onTurnsChange, readyReceipt]);
 
   // Once escrow locks, orchestrator.ts's static steps stop at
   // "work-in-progress" and never change again — it has no way to know what
@@ -844,9 +963,20 @@ function DealProgress({
   // specialist" in Chat while ProgressView (no such gate) showed Released.
   // A receipt is itself proof of the terminal state, so treat it as one.
   const effectiveLiveStatus: DealStatusName | null = receipt ? "Released" : liveStatus;
+  const latestCheckpoint = checkpoints.length > 0 ? checkpoints[checkpoints.length - 1] : undefined;
   const displaySteps: StatusStep[] = (() => {
     if (!effectivePending || !effectiveLiveStatus) return steps;
-    const targetIndex = LIVE_STATUS_STEP_INDEX[effectiveLiveStatus];
+    // verify_and_release() bumps BOTH reputations in the same atomic
+    // transaction as payment (see deal.move's verify_and_release calling
+    // client_reputation.record_completed() / specialist_reputation.
+    // record_completed() right after pay_specialist) — so a `receipt`
+    // existing means reputation is already done too, not merely payment.
+    // Without this, step 8 ("Updating on-chain reputation") sat at
+    // "pending" forever once release finished, since deal.move's status
+    // machine has no separate on-chain "Settled" phase this poll could
+    // ever observe distinct from Released, and the poll effect stops
+    // entirely the instant `receipt` is set (see the poll effect above).
+    const targetIndex = receipt ? steps.length - 1 : LIVE_STATUS_STEP_INDEX[effectiveLiveStatus];
     if (targetIndex === undefined) return steps;
     return steps.map((step, i) => {
       if (i < targetIndex) return step.state === "done" ? step : { ...step, state: "done" as const };
@@ -854,7 +984,9 @@ function DealProgress({
         return {
           ...step,
           state: effectiveLiveStatus === "Released" || effectiveLiveStatus === "Settled" ? ("done" as const) : ("active" as const),
-          detail: effectivePending ? liveStatusDetail(effectiveLiveStatus, effectivePending) : (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? step.detail),
+          detail: effectivePending
+            ? liveStatusDetail(effectiveLiveStatus, effectivePending, latestCheckpoint)
+            : (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? step.detail),
         };
       }
       return step.state === "pending" ? step : { ...step, state: "pending" as const, detail: undefined };
@@ -873,6 +1005,16 @@ function DealProgress({
   const allStepsDone = displaySteps.length > 0 && displaySteps.every((s) => s.state === "done");
   const allDone = allStepsDone && (Boolean(receipt) || effectiveLiveStatus === "Released" || effectiveLiveStatus === "Settled");
 
+  // Once a chain has moved past this leg (a later leg now exists), this
+  // card is no longer the "current" thing happening — collapsing it is
+  // what actually makes a leg transition read as a clear handoff instead
+  // of every leg's full step-by-step log just piling up on screen at
+  // once. Collapses immediately (no allDone requirement, no delay) the
+  // moment isLatestUnadvancedLeg goes false, since by definition that only
+  // happens after this leg's own proof already existed — there's nothing
+  // further for the user to watch happen here.
+  const supersededByLaterLeg = chain !== null && !isLatestUnadvancedLeg;
+
   useEffect(() => {
     if (allDone && !autoCollapsed) {
       const timer = setTimeout(() => {
@@ -883,13 +1025,25 @@ function DealProgress({
     }
   }, [allDone, autoCollapsed]);
 
+  useEffect(() => {
+    if (supersededByLaterLeg) {
+      setExpanded(false);
+      setAutoCollapsed(true);
+    }
+  }, [supersededByLaterLeg]);
+
   async function handleRelease() {
     if (!effectivePending) return;
     setReleasing(true);
     setReleaseError(null);
     try {
       const finalReceipt = await releaseDeal(effectivePending);
-      onReleased(finalReceipt);
+      // Hold the receipt here rather than opening the pop-out card
+      // immediately — release finishing and the user actually being
+      // ready to look at a receipt are two different moments. The card
+      // now shows a real "View receipt" button; onReleased (which pops
+      // the modal open in App.tsx) only fires once that's clicked.
+      setReadyReceipt(finalReceipt);
     } catch (err) {
       setReleaseError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -902,7 +1056,9 @@ function DealProgress({
     : allDone
       ? "Done"
       : effectivePending && effectiveLiveStatus
-        ? (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? "Working…")
+        ? (effectiveLiveStatus === "Accepted" && latestCheckpoint
+            ? latestCheckpoint.label
+            : (LIVE_STATUS_LABEL[effectiveLiveStatus] ?? "Working…"))
         : displaySteps.find((s) => s.state === "active")?.label ?? "Working…";
 
   return (
@@ -913,9 +1069,13 @@ function DealProgress({
         className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-surface-hover"
       >
         {!allDone && !failed && (
-          <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-vellum" aria-hidden="true" />
+          <span
+            className="inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-manifest border-t-vellum"
+            role="status"
+            aria-label="In progress"
+          />
         )}
-        {allDone && <span className="shrink-0 text-emerald-500">✓</span>}
+        {allDone && <span className="shrink-0 text-vellum">✓</span>}
         {failed && <span className="shrink-0 text-red-500">✕</span>}
         <span className="min-w-0 flex-1 truncate text-sm text-vellum">{summary}</span>
         <span className={`shrink-0 text-manifest transition-transform ${expanded ? "rotate-180" : ""}`}>⌄</span>
@@ -933,7 +1093,22 @@ function DealProgress({
               <p className="mb-4 text-xs text-manifest">Task: {task}</p>
               <StepList steps={displaySteps} />
 
-              {effectivePending && !receipt && liveStatus === "Delivered" && (
+              {checkpoints.length > 0 && (
+                <div className="mt-4 space-y-3 border-t border-border pt-4">
+                  {checkpoints.map((c) => (
+                    <div key={c.checkpointId}>
+                      <p className="text-[11px] uppercase tracking-wide text-manifest">Specialist update</p>
+                      <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                        <p className="text-sm text-vellum">{c.label}</p>
+                        <p className="shrink-0 text-xs text-manifest">{formatDateTime(c.createdAtMs)}</p>
+                      </div>
+                      {c.note && <p className="mt-1 text-sm text-manifest">{c.note}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {effectivePending && !receipt && !readyReceipt && liveStatus === "Delivered" && (
                 <div className="mt-4 border-t border-border pt-4">
                   <button
                     type="button"
@@ -944,6 +1119,49 @@ function DealProgress({
                     {releasing ? "Releasing…" : "Verify & Release Payment"}
                   </button>
                   {releaseError && <p className="mt-2 text-sm text-wax">{releaseError}</p>}
+                </div>
+              )}
+
+              {readyReceipt && !receipt && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <p className="mb-2 text-sm text-vellum">
+                    Payment released — {readyReceipt.amount.toFixed(4)} SUI paid to {readyReceipt.counterpartyName}.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onReleased(readyReceipt)}
+                    className="rounded-md bg-white px-4 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90"
+                  >
+                    View receipt
+                  </button>
+                </div>
+              )}
+
+              {chain && !chain.ended && !allDone && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onTurnsChange((prev) =>
+                        prev.map((t) =>
+                          t.kind === "deal" && t.chain?.chainId === chain.chainId ? { ...t, chain: { ...t.chain, ended: true } } : t,
+                        ),
+                      );
+                    }}
+                    className="rounded-md border border-border px-3 py-1.5 text-xs text-manifest transition-colors hover:border-white/30 hover:text-vellum"
+                  >
+                    End session
+                  </button>
+                  <p className="mt-1.5 text-xs text-manifest">
+                    Stops this chain from creating any further legs. Any deal already escrowed on-chain is untouched — it still resolves
+                    normally (accept/deliver/release, or refunds automatically if the specialist never responds).
+                  </p>
+                </div>
+              )}
+
+              {chain?.ended && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <p className="text-xs text-manifest">Session ended — this chain will not create any further legs.</p>
                 </div>
               )}
             </div>

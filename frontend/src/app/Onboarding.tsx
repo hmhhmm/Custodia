@@ -32,8 +32,16 @@ export interface OnboardingResult {
   mandateId: string;
 }
 
-const DEFAULT_MAX_SPEND_SUI = 0.2;
-const DEFAULT_FUNDING_SUI = 0.1;
+// One value now funds AND authorizes the SAME amount — this used to
+// authorize `maxSpend` (whatever the user typed) while always funding a
+// hardcoded 0.1 SUI regardless, so a Mandate created for "0.2 SUI" was
+// really only ever backed by 0.1 SUI of real custody
+// (mandate.move's spendable() = min(remaining, funds), so the tighter of
+// the two silently wins) — confusing, and easy to mistake for an actual
+// on-chain bug rather than a frontend one. See MandateView.tsx's
+// NewMandateForm for the same fix applied to funding an ADDITIONAL
+// Mandate later.
+const DEFAULT_MANDATE_SUI = 1;
 export const MANDATE_CATEGORIES = ["legal-review", "courier", "translation", "logistics", "design", "research"] as const;
 const MANDATE_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -67,7 +75,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
   const [error, setError] = useState<string | null>(null);
 
   const [mandateId, setMandateId] = useState<string | null>(null);
-  const [maxSpend, setMaxSpend] = useState(DEFAULT_MAX_SPEND_SUI);
+  const [maxSpend, setMaxSpend] = useState(DEFAULT_MANDATE_SUI);
 
   // Reload wipes React state, but the on-chain Mandate from a previous
   // session still exists — re-check for it so setup doesn't ask you to
@@ -106,7 +114,7 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
           maxSpend: suiToMist(maxSpend),
           allowedCategories: [...MANDATE_CATEGORIES],
           expiresAtMs: BigInt(Date.now() + MANDATE_DURATION_MS),
-          fundingAmount: suiToMist(DEFAULT_FUNDING_SUI),
+          fundingAmount: suiToMist(maxSpend),
         });
         const result = await dAppKit.signAndExecuteTransaction({ transaction: tx });
         if (result.FailedTransaction) {
@@ -144,9 +152,9 @@ export function Onboarding({ onComplete }: { onComplete: (result: OnboardingResu
             Envoy's spending limit
           </label>
           <p className="mt-1 text-sm text-manifest">
-            The most Envoy can commit across all deals — funded with {DEFAULT_FUNDING_SUI} SUI now. This
-            is a one-time cap for this Mandate; raising it later requires a code change, not a UI action
-            yet.
+            The most Envoy can commit across all deals — funded with this same amount from your wallet
+            now. This is a one-time cap for this Mandate; raising it later requires creating a new one
+            from the Mandate tab.
           </p>
           <div className="mt-3 flex items-center gap-2">
             <input

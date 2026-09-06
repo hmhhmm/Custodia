@@ -1,5 +1,82 @@
 # Custodia — System Architecture
 
+## Current state (2026-09-04) — read this first
+
+Everything below this section is the original architecture narrative,
+written across 2026-08-29 through 2026-09-01 and left intact as history.
+Several things have moved on since; this section is the up-to-date
+summary. Where this section and the narrative below disagree, **this
+section is correct.**
+
+**Deployment — republished fresh, not the original package.** The
+original package's `UpgradeCap` key turned out to be unrecoverable (it
+was generated inside a disposable session sandbox and never backed up),
+so an in-place `sui client upgrade` was impossible. The whole package —
+same Move code, plus the new `checkpoint` module below — was republished
+from a newly generated, actually-held CLI address. Every `Deal`/
+`Mandate`/`AgentIdentity` created under the old package (`0x881df0e7…`,
+everything the "Person 4 wiring status" section below describes testing
+against) is orphaned: still real on-chain data, but the app no longer
+reads from that package.
+
+| What | Value |
+|---|---|
+| Package ID | `0x8f9df445446cb4568136e6a0f6ef69c36d15ce869fca1185660bcd16a616a0e3` |
+| `AgentRegistry` (shared) | `0x81ee790128d7a27b9712836b5400d98f3e04d42aa3376c7beded1c4bb857b473` |
+| `UpgradeCap` | `0x43639f9c63873a3ca454d558b3e0c98ac66dbb402ff2e2ba355b950f886deb3d` |
+
+See `README.md`'s "Deployed addresses" section for the full story and
+the "back this key up" lesson. All prior test data must be recreated —
+onboarding, specialist registration, and every deal need to be redone
+against this package.
+
+**New: `checkpoint.move` and multi-agent deal chains.** Two related
+features added this session, both real (not mocked), neither touching
+`deal.move`'s existing 9-state `DealStatus` enum or its transition
+matrix:
+
+- `move/sources/checkpoint.move` — a new, additive module. A specialist
+  can push a real `DealCheckpoint` object against a `Deal` — a granular
+  status update (e.g. "Picked up", "En route", "Arrived") with an
+  optional Seal-encrypted photo, reusing the Deal's existing
+  `DealAllowlist` for access control rather than a new one. This sits
+  alongside `Deal.status`, not inside it — `deal.move` still only ever
+  sees `Accepted → Delivered` exactly as before; checkpoints are a
+  richer trail the frontend renders underneath that coarse status, not a
+  replacement for it. Frontend: `frontend/src/sui/ptb-checkpoint.ts`
+  (build the push transaction), `deal-queries.ts`'s
+  `findCheckpointsForDeal` (read the trail), `SpecialistInbox.tsx`'s
+  `ActiveJobScreen` (a Grab/Foodpanda-style focused "current job" screen
+  with per-category checkpoint buttons and photo capture, replacing the
+  old plain deliverable-textarea-in-a-card UI for an `Accepted` deal),
+  `ProgressView.tsx`'s `Timeline` (redesigned into a horizontal stepper
+  with the checkpoint trail interleaved under the "Accepted" stage).
+
+- **Multi-agent deal chains** — since `Deal` is strictly two-party with
+  no multi-party primitive, a "chain" (e.g. pick up a broken item →
+  repair it → return it) is built by creating several ordinary `Deal`s
+  in sequence, gated on real on-chain proof, not a new contract type.
+  `frontend/src/agent/chat.ts` gained a second Gemini tool,
+  `start_deal_chain` (alongside the existing single-task `start_deal`),
+  which the LLM calls when a request has genuinely sequential phases
+  handled by different specialists. `frontend/src/app/orchestrator.ts`'s
+  `createDealChain` escrows only the first leg;
+  `frontend/src/app/chainAdvance.ts`'s `tryAdvanceChain` — polled from
+  `ChatPanel.tsx`'s `DealProgress`, the same component that already
+  polls each deal's live on-chain status — creates each subsequent leg
+  only once `findProofForDeal` confirms the prior leg's real delivery
+  proof exists, and posts an LLM-generated (honestly-degrading, never
+  fabricated on failure) summary of that leg's decrypted proof back into
+  the same chat thread. `types.ts`'s `ConversationTurn` gained an
+  optional `chain?: ChainInfo` field — additive, every existing
+  single-deal turn is unaffected.
+
+Not yet re-verified end-to-end live against the new package as of this
+writing — the redeploy and code are done and type-check/build clean, but
+no deal has been run start-to-finish on it yet. That's the next concrete
+step: redo onboarding, register specialists, and run a real multi-agent
+chain through to completion.
+
 ## Summary
 
 Custodia is a neutral, on-chain trust and settlement layer built on Sui

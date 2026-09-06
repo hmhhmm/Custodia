@@ -37,12 +37,28 @@ function stripEphemeralFields(turns: ConversationTurn[]): ConversationTurn[] {
   });
 }
 
+// Turns saved before every ConversationTurn variant carried a stable
+// `id` (see types.ts's own comment on why the array-index React key it
+// replaced was a real bug) have no `id` field in old localStorage data.
+// Backfilling one on load keeps that old history usable instead of
+// producing turns with `id: undefined` — which would silently reintroduce
+// the exact React-key bug this schema change fixed, just for restored
+// history instead of freshly-created turns.
+function backfillMissingIds(turns: unknown[]): ConversationTurn[] {
+  return turns.map((turn) => {
+    if (turn && typeof turn === "object" && !("id" in turn)) {
+      return { ...turn, id: crypto.randomUUID() } as ConversationTurn;
+    }
+    return turn as ConversationTurn;
+  });
+}
+
 export function loadChatHistory(walletAddress: string): ConversationTurn[] {
   try {
     const raw = localStorage.getItem(STORAGE_PREFIX + walletAddress);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? backfillMissingIds(parsed) : [];
   } catch {
     return [];
   }

@@ -12,9 +12,14 @@ import type { DealReceipt } from "./types";
 export function Receipt({
   receipt,
   onBackToDeals,
+  onClose,
 }: {
   receipt: DealReceipt;
   onBackToDeals: () => void;
+  /** Dismisses the card in place — the user stays exactly where they
+   * were (e.g. mid-conversation in Chat) instead of being navigated to
+   * the Deals tab, unlike onBackToDeals. */
+  onClose: () => void;
 }) {
   const [deliverableText, setDeliverableText] = useState<string | null>(null);
   const [decryptStatus, setDecryptStatus] = useState<"idle" | "loading" | "error">("idle");
@@ -88,8 +93,19 @@ export function Receipt({
   }, [fileUrl]);
 
   return (
-    <div className="flex flex-col items-center py-8 text-center">
-      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-hover text-emerald-500">
+    <div className="relative flex flex-col items-center py-8 text-center">
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close"
+        className="absolute right-0 top-0 rounded-md p-1.5 text-manifest transition-colors hover:text-vellum"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      </button>
+
+      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-hover text-vellum">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M20 6 9 17l-5-5" />
         </svg>
@@ -168,13 +184,22 @@ export function Receipt({
         </a>
       )}
 
-      <button
-        type="button"
-        onClick={onBackToDeals}
-        className="mt-8 rounded-md bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      >
-        Back to your deals
-      </button>
+      <div className="mt-8 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md border border-border px-5 py-2.5 text-sm font-medium text-vellum transition-colors hover:border-white/30"
+        >
+          Continue
+        </button>
+        <button
+          type="button"
+          onClick={onBackToDeals}
+          className="rounded-md bg-white px-5 py-2.5 text-sm font-medium text-black transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          View in Deals
+        </button>
+      </div>
     </div>
   );
 }

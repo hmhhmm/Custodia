@@ -41,8 +41,11 @@ import { discoverAgents } from "../agent/discovery";
 import { interpretGoal } from "../agent/llm";
 import { buildLockEscrowAndCreateDealTx, extractDealIdFromResult } from "../sui/ptb-escrow";
 import { buildCreateDealAllowlistTx, extractAllowlistIdFromEffects } from "../sui/ptb-deal-access";
+import { buildCreateDealBriefTx } from "../sui/ptb-deal-brief";
+import { encryptDealContent } from "../verification/seal";
+import { storeBlob } from "../verification/walrus";
 import { findOwnedAgentIdentity, findMandateDetails } from "../sui/onboarding-status";
-import type { OnboardingResult } from "./Onboarding";
+import { MANDATE_CATEGORIES, type OnboardingResult } from "./Onboarding";
 import type { PendingRelease, StatusStep } from "./types";
 
 function wait(ms: number): Promise<void> {
@@ -59,6 +62,15 @@ export async function createDealAndEscrow(
     onStepsChange: (steps: StatusStep[]) => void;
     onEscrowed: (pending: PendingRelease) => void;
   },
+  // Set for one leg of a multi-agent chain, where the category was
+  // ALREADY decided by start_deal_chain (chat.ts) — see llm.ts's
+  // interpretGoal forcedCategory param for why this must be threaded
+  // through rather than re-derived: a leg's free-text taskDescription
+  // being independently re-classified here could land on (and this
+  // session genuinely did land on) a DIFFERENT category than the one
+  // the chain actually escrowed against, matching the wrong specialist
+  // type entirely.
+  forcedCategory?: string,
 ): Promise<void> {
   const steps: StatusStep[] = [
     { id: "searching", state: "active", label: "Reading Mandate limits & searching the AgentRegistry", detail: "Reading the on-chain AgentRegistry for every specialist registered for this task's category." },
@@ -123,12 +135,18 @@ export async function createDealAndEscrow(
 
   let interpreted;
   try {
-    interpreted = await interpretGoal(goal, budgetCeilingSui);
+    interpreted = await interpretGoal(
+      goal,
+      budgetCeilingSui,
+      forcedCategory as (typeof MANDATE_CATEGORIES)[number] | undefined,
+    );
   } catch (err) {
     fail(0, `Goal interpretation failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  steps[0].detail = `Asked Gemini to classify the task and propose a budget within that ${budgetCeilingSui.toFixed(4)} SUI ceiling. Result: category "${interpreted.category}", understood as "${interpreted.description}", proposed budget ${interpreted.maxBudget.toFixed(4)} SUI. Now querying the on-chain AgentRegistry for every specialist registered under "${interpreted.category}".`;
+  steps[0].detail = forcedCategory
+    ? `Category already decided by the chain plan: "${interpreted.category}". Asked Gemini for a budget within that ${budgetCeilingSui.toFixed(4)} SUI ceiling — proposed ${interpreted.maxBudget.toFixed(4)} SUI. Now querying the on-chain AgentRegistry for every specialist registered under "${interpreted.category}".`
+    : `Asked Gemini to classify the task and propose a budget within that ${budgetCeilingSui.toFixed(4)} SUI ceiling. Result: category "${interpreted.category}", understood as "${interpreted.description}", proposed budget ${interpreted.maxBudget.toFixed(4)} SUI. Now querying the on-chain AgentRegistry for every specialist registered under "${interpreted.category}".`;
   emit();
 
   // Any registered specialist for the category — no longer filtered to one
@@ -165,13 +183,24 @@ export async function createDealAndEscrow(
   await wait(STEP_DELAY_MS);
 
   // --- Steps 3-4: REAL PTB #1 -------------------------------------------
-  // onboarding.mandateId was created once during Onboarding.tsx, delegating
-  // to Envoy. Signed by envoyKeypair, not the connected wallet — see the
-  // file header. Envoy's own AgentIdentity was registered once during
-  // onboarding too (ensureEnvoyIdentity) — look it up fresh rather than
-  // threading it through OnboardingResult, since it's Envoy's, not tied to
-  // any particular user session.
-  const mandateId = onboarding.mandateId;
+  // Use the SAME Mandate object `mandate` (fetched fresh above, at line
+  // ~116) that the spend-limit check itself just passed against — NOT
+  // onboarding.mandateId, which is whatever Mandate happened to exist the
+  // one time onboarding ran and is never refreshed afterward. This was a
+  // real bug: a user who creates an ADDITIONAL Mandate later in the same
+  // session (e.g. a bigger one, after the first ran low) would see the
+  // "Passed — Mandate X allows..." message correctly describe the NEW
+  // Mandate (since findMandateDetails picks whichever has the most
+  // spendable room), while the actual escrow transaction silently signed
+  // against the OLD, stale onboarding.mandateId instead — so a check that
+  // said "passed" could still abort moments later with
+  // ESpendLimitExceeded against a completely different Mandate the user
+  // never even saw named. Signed by envoyKeypair, not the connected
+  // wallet — see the file header. Envoy's own AgentIdentity was
+  // registered once during onboarding too (ensureEnvoyIdentity) — look it
+  // up fresh rather than threading it through OnboardingResult, since
+  // it's Envoy's, not tied to any particular user session.
+  const mandateId = mandate.mandateId;
   const envoyAgent = await findOwnedAgentIdentity(ENVOY_ADDRESS, "client");
   if (!envoyAgent) {
     fail(3, "Envoy has no registered AgentIdentity yet — this should have been created during onboarding.");
@@ -233,6 +262,43 @@ export async function createDealAndEscrow(
     fail(5, `Seal allowlist setup failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // --- REAL PTB: write the specialist's actual work order on-chain -----
+  // The rich task brief Gemini produced (what the item specifically is,
+  // where to collect/deliver it, contact details — see chat.ts's
+  // start_deal/start_deal_chain tool schemas) previously existed only in
+  // the CLIENT's own chat history and was never stored anywhere the
+  // specialist could read it — a real gap, not a display bug: a
+  // specialist accepting a Deal saw only its category and amount, with
+  // no way to learn where to actually go. Seal-encrypted against the
+  // allowlist just created, so only the two real parties on this Deal
+  // can decrypt it — same real infra already used for deliverables, now
+  // used for the brief that starts the work instead of the proof that
+  // ends it. Signed by envoyKeypair, same as every other client-side
+  // write on this Deal — see this file's header on why Envoy, not the
+  // connected wallet, owns the client AgentIdentity.
+  try {
+    const briefBytes = new TextEncoder().encode(goal);
+    const encryptedBrief = await encryptDealContent(briefBytes, dAppKit.getClient(), allowlistId);
+    const storedBrief = await storeBlob(encryptedBrief.encryptedObject);
+    const briefTx = buildCreateDealBriefTx({
+      dealId,
+      clientAgentIdentityId: envoyAgent.agentId,
+      storageId: storedBrief.blobId,
+      seedId: encryptedBrief.seedId,
+    });
+    const briefResult = await envoyKeypair.signAndExecuteTransaction({ transaction: briefTx, client: dAppKit.getClient() });
+    if (briefResult.FailedTransaction) {
+      throw new Error(briefResult.FailedTransaction.status.error?.message ?? "Brief creation failed");
+    }
+  } catch (err) {
+    // Genuinely non-fatal for the deal itself — escrow is already locked
+    // and the specialist can still be reached some other way — but
+    // surfaced loudly rather than silently swallowed, since a missing
+    // brief is exactly the "specialist doesn't know where to collect"
+    // problem this feature exists to fix.
+    console.error("Deal brief creation failed for", dealId, err);
+  }
+
   handlers.onEscrowed({
     dealId,
     counterpartyName: candidate.suinsName,
@@ -277,5 +343,5 @@ export async function createDealChain(
     onEscrowed: (pending: PendingRelease) => void;
   },
 ): Promise<void> {
-  await createDealAndEscrow(legs[0].taskDescription, connectedAddress, onboarding, handlers);
+  await createDealAndEscrow(legs[0].taskDescription, connectedAddress, onboarding, handlers, legs[0].category);
 }

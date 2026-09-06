@@ -27,6 +27,12 @@ import { ENVOY_ADDRESS } from "../sui/envoy-signer";
 import { isDealHidden, getCachedDealTitle, setCachedDealTitle } from "./deal-local-meta";
 import { summarizeDealTitle } from "../agent/llm";
 
+export interface ChainDetailLeg {
+  dealId: string;
+  turn?: Extract<ConversationTurn, { kind: "deal" }>;
+  label: string;
+}
+
 function mistToSui(mist: bigint): number {
   return Number(mist) / 1_000_000_000;
 }
@@ -41,10 +47,10 @@ const STATUS_STYLE: Record<DealStatusName, { text: string; label: string }> = {
   Accepted: { text: "text-manifest", label: "Accepted" },
   Delivered: { text: "text-slate-400", label: "Delivered" },
   Verified: { text: "text-manifest", label: "Verified" },
-  Released: { text: "text-emerald-400", label: "Released" },
+  Released: { text: "text-vellum", label: "Released" },
   Disputed: { text: "text-red-400", label: "Disputed" },
   Refunded: { text: "text-manifest", label: "Refunded" },
-  Settled: { text: "text-emerald-400", label: "Settled" },
+  Settled: { text: "text-vellum", label: "Settled" },
 };
 
 /** Category icon set — a small, deliberately simple line-icon per
@@ -218,6 +224,83 @@ function ChainDealCard({
   );
 }
 
+/** Groups a completed/released multi-agent chain's legs into one card —
+ * the released-deal counterpart to ChainGroupCard above (that one covers
+ * legs still live in this session's `turns`; this one covers legs
+ * re-derived from chain via findDealsForClient once a page refresh has
+ * cleared their in-memory turn state, matched back to session data by
+ * dealId — see groupByChain/chainDealGroups in Dashboard for how the
+ * match happens). Uses the ORIGINAL task text this session already has
+ * (from when the chain was created) rather than another useDealTitle
+ * call per leg — a chain's own task descriptions are already real,
+ * specific, written briefs (see chat.ts's start_deal_chain prompt), not
+ * vague placeholders an LLM title would need to improve on. */
+function CompletedChainGroupCard({
+  legs,
+  metadataByDeal,
+  onOpenChain,
+}: {
+  legs: { deal: SpecialistDeal; task: string; legIndex: number }[];
+  metadataByDeal: Map<string, DealMetadata>;
+  onOpenChain: (legs: ChainDetailLeg[]) => void;
+}) {
+  const sorted = [...legs].sort((a, b) => a.legIndex - b.legIndex);
+  // Same fix as ChainDealCard above: escrowedAmountMist is a LIVE balance
+  // that correctly reads 0 once verify_and_release has paid it out — a
+  // released leg's REAL amount only survives in the DealCreated event
+  // metadata this session already fetched. Using the live balance here
+  // is exactly what made a chain of 3 fully-paid legs read as "0 SUI
+  // total".
+  const amountsMist = sorted.map((l) => metadataByDeal.get(l.deal.dealId)?.amountMist ?? l.deal.escrowedAmountMist);
+  const totalMist = amountsMist.reduce((sum, m) => sum + m, 0n);
+  const allReleased = sorted.every((l) => l.deal.status === "Released" || l.deal.status === "Settled");
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenChain(sorted.map((l) => ({ dealId: l.deal.dealId, label: l.task })))}
+      className="group flex w-full flex-col gap-4 overflow-hidden rounded-xl border border-border bg-surface p-5 text-left transition-colors hover:border-white/20 hover:bg-surface-hover"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <CardIcon tone="neutral" />
+        <span className={`text-xs font-medium ${allReleased ? STATUS_STYLE.Released.text : "text-manifest"}`}>
+          {allReleased ? "Released" : `${sorted.filter((l) => l.deal.status === "Released" || l.deal.status === "Settled").length} of ${sorted.length} released`}
+        </span>
+      </div>
+
+      <div className="min-w-0">
+        <p className="line-clamp-2 text-base font-medium text-vellum">{sorted[0]?.task}</p>
+      </div>
+
+      <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+        {sorted.map((l, i) => {
+          const status = STATUS_STYLE[l.deal.status];
+          return (
+            <div key={l.deal.dealId} className="flex items-center justify-between gap-2 text-xs">
+              <span className="min-w-0 truncate text-manifest">
+                {i + 1}. {l.task}
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <span className="font-data text-manifest">
+                  {mistToSui(amountsMist[i]).toLocaleString(undefined, { maximumFractionDigits: 4 })} SUI
+                </span>
+                <span className={`font-medium ${status.text}`}>{status.label}</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center justify-between border-t border-border pt-3 text-sm">
+        <span className="font-data text-vellum">
+          {mistToSui(totalMist).toLocaleString(undefined, { maximumFractionDigits: 4 })} SUI total
+        </span>
+        <span className="text-manifest transition-transform group-hover:translate-x-0.5">→</span>
+      </div>
+    </button>
+  );
+}
+
 /** The current step's label for an in-progress deal turn, e.g. "Escrow
  * locked" — whichever step is "active", or the last "done" one if none is
  * active yet (a brief gap between steps). */
@@ -282,17 +365,108 @@ function InProgressCard({
   );
 }
 
+/** One card per multi-agent chain (pickup -> repair -> return, etc.),
+ * grouping every leg that shares a chainId instead of each leg showing up
+ * as its own separate top-level card — a chain of 3 deals used to read
+ * as 3 unrelated cards in this grid with no indication they were one
+ * request. Opens on whichever leg is currently active (the first
+ * non-done one), or the last leg if every leg this session knows about is
+ * already done. */
+function ChainGroupCard({
+  legs,
+  onOpenChain,
+  onReturnToChat,
+}: {
+  legs: Extract<ConversationTurn, { kind: "deal" }>[];
+  onOpenChain: (legs: ChainDetailLeg[]) => void;
+  onReturnToChat: (threadId: string) => void;
+}) {
+  const sorted = [...legs].sort((a, b) => (a.chain?.legIndex ?? 0) - (b.chain?.legIndex ?? 0));
+  const anyFailed = sorted.some((t) => t.steps.some((s) => s.state === "failed"));
+  const legTotal = sorted[0]?.chain?.legTotal ?? sorted.length;
+  const allLegsDone = sorted.length >= legTotal && sorted.every((t) => t.steps.length > 0 && t.steps.every((s) => s.state === "done"));
+  const activeLeg = sorted.find((t) => t.steps.some((s) => s.state !== "done")) ?? sorted[sorted.length - 1];
+
+  function openWholeChain() {
+    onOpenChain(
+      sorted
+        .filter((t) => t.pending)
+        .map((t) => ({ dealId: t.pending!.dealId, turn: t, label: t.task })),
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-surface p-5 text-left transition-colors hover:border-white/20 hover:bg-surface-hover">
+      <button type="button" onClick={openWholeChain} className="flex flex-col gap-4 text-left">
+        <div className="flex items-start justify-between gap-3">
+          <CardIcon tone={anyFailed ? "failed" : "active"} />
+          <span className="rounded-full border border-border px-2.5 py-1 text-xs text-manifest">
+            {anyFailed ? "Failed" : allLegsDone ? "Done" : `Part ${activeLeg.chain?.legIndex !== undefined ? activeLeg.chain.legIndex + 1 : sorted.length} of ${legTotal}`}
+          </span>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <p className="line-clamp-2 font-medium text-vellum">{sorted[0]?.task}</p>
+          <p className="text-sm text-manifest">{currentStepLabel(activeLeg.steps)}</p>
+        </div>
+
+        <div className="border-t border-border pt-3">
+          <ol className="flex flex-col gap-1.5">
+            {sorted.map((leg, i) => {
+              const legDone = leg.steps.length > 0 && leg.steps.every((s) => s.state === "done");
+              const legFailed = leg.steps.some((s) => s.state === "failed");
+              return (
+                <li key={leg.id} className="flex items-center gap-2 text-xs">
+                  <span
+                    className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border text-[10px] ${
+                      legFailed
+                        ? "border-wax text-wax"
+                        : legDone
+                          ? "border-vellum text-vellum"
+                          : "border-border text-manifest"
+                    }`}
+                  >
+                    {legFailed ? "✕" : legDone ? "✓" : i + 1}
+                  </span>
+                  <span className={`min-w-0 truncate ${legDone || legFailed ? "text-manifest" : "text-vellum"}`}>{leg.task}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      </button>
+
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onReturnToChat(activeLeg.threadId);
+        }}
+        className="rounded-md border border-border px-3 py-1.5 text-xs text-vellum transition-colors hover:border-white/30"
+      >
+        Return to chat
+      </button>
+    </div>
+  );
+}
+
 export function Dashboard({
   turns,
   onNewDeal,
   onOpenDeal,
   onOpenChainDeal,
+  onOpenChain,
   onReturnToChat,
 }: {
   turns: ConversationTurn[];
   onNewDeal: () => void;
   onOpenDeal: (dealTurnId: string) => void;
   onOpenChainDeal: (dealId: string) => void;
+  /** Opens ChainDetailView with every leg of a multi-agent chain stacked
+   * on one page — legs in order, each carrying its real dealId and (for
+   * a leg still live in this session) the matching turn for the nicer
+   * pre-escrow step feed. */
+  onOpenChain: (legs: ChainDetailLeg[]) => void;
   onReturnToChat: (threadId: string) => void;
 }) {
   const [chainDeals, setChainDeals] = useState<SpecialistDeal[]>([]);
@@ -342,6 +516,67 @@ export function Dashboard({
   const visibleChainDeals = showHidden ? notLiveTracked : notLiveTracked.filter((d) => !isDealHidden(d.dealId));
   const hiddenCount = notLiveTracked.filter((d) => isDealHidden(d.dealId)).length;
 
+  // Groups legs that share a chainId into one card instead of each leg of
+  // a multi-agent chain (pickup -> repair -> return) showing up as its
+  // own unrelated-looking card. Deal.move has no on-chain notion of
+  // "this deal is part of chain X" — chaining is purely a client-side
+  // orchestration layer (see chainAdvance.ts) — so grouping can only use
+  // real session data (turns, persisted to this wallet's local chat
+  // history) rather than inventing a link the chain doesn't actually
+  // have. A deal with no chain field (a plain single-leg deal, or a
+  // chain leg from a session whose history is gone) simply renders on
+  // its own, same as before.
+  function groupByChain<T extends Extract<ConversationTurn, { kind: "deal" }>>(dealTurns: T[]): (T | T[])[] {
+    const seenChainIds = new Set<string>();
+    const groups: (T | T[])[] = [];
+    for (const turn of dealTurns) {
+      const chainId = turn.chain?.chainId;
+      if (!chainId) {
+        groups.push(turn);
+        continue;
+      }
+      if (seenChainIds.has(chainId)) continue;
+      seenChainIds.add(chainId);
+      groups.push(dealTurns.filter((t) => t.chain?.chainId === chainId));
+    }
+    return groups;
+  }
+
+  const inProgressGroups = groupByChain(inProgress);
+
+  // Released/on-chain-only deals (chainDeals) carry no chain field of
+  // their own (SpecialistDeal is re-derived purely from the Deal object)
+  // — match them back to this session's own completed turns (which DO
+  // carry chain info) by dealId, so a chain whose legs have all already
+  // been released still groups instead of exploding into separate cards
+  // the moment `receipt` gets set and they drop out of `inProgress`.
+  const completedChainTurnsByDealId = new Map(
+    turns
+      .filter((t): t is Extract<ConversationTurn, { kind: "deal" }> => t.kind === "deal" && !!t.receipt && !!t.chain)
+      .map((t) => [t.pending?.dealId, t] as const)
+      .filter((entry): entry is [string, Extract<ConversationTurn, { kind: "deal" }>] => !!entry[0]),
+  );
+  type CompletedChainLeg = { deal: SpecialistDeal; task: string; legIndex: number };
+  const seenCompletedChainIds = new Set<string>();
+  const chainDealGroups: (SpecialistDeal | CompletedChainLeg[])[] = [];
+  for (const deal of visibleChainDeals) {
+    const matchedTurn = completedChainTurnsByDealId.get(deal.dealId);
+    const chainId = matchedTurn?.chain?.chainId;
+    if (!chainId) {
+      chainDealGroups.push(deal);
+      continue;
+    }
+    if (seenCompletedChainIds.has(chainId)) continue;
+    seenCompletedChainIds.add(chainId);
+    const legs: CompletedChainLeg[] = visibleChainDeals
+      .map((d) => {
+        const t = completedChainTurnsByDealId.get(d.dealId);
+        return t?.chain?.chainId === chainId ? { deal: d, task: t.task, legIndex: t.chain.legIndex } : null;
+      })
+      .filter((l): l is CompletedChainLeg => l !== null);
+    chainDealGroups.push(legs);
+  }
+
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8">
       <div className="mb-8 flex items-center justify-between gap-4">
@@ -370,9 +605,18 @@ export function Dashboard({
         <div className="mb-10">
           <h2 className="mb-4 text-sm font-medium text-manifest">In progress</h2>
           <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {inProgress.map((turn) => (
-              <InProgressCard key={turn.id} turn={turn} onClick={() => onOpenDeal(turn.id)} onReturnToChat={onReturnToChat} />
-            ))}
+            {inProgressGroups.map((group) =>
+              Array.isArray(group) ? (
+                <ChainGroupCard
+                  key={group[0]?.chain?.chainId}
+                  legs={group}
+                  onOpenChain={onOpenChain}
+                  onReturnToChat={onReturnToChat}
+                />
+              ) : (
+                <InProgressCard key={group.id} turn={group} onClick={() => onOpenDeal(group.id)} onReturnToChat={onReturnToChat} />
+              ),
+            )}
           </div>
         </div>
       )}
@@ -390,14 +634,23 @@ export function Dashboard({
         <div>
           {inProgress.length > 0 && <h2 className="mb-4 text-sm font-medium text-manifest">All deals</h2>}
           <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {visibleChainDeals.map((deal) => (
-              <ChainDealCard
-                key={deal.dealId}
-                deal={deal}
-                metadata={metadataByDeal.get(deal.dealId)}
-                onOpen={() => onOpenChainDeal(deal.dealId)}
-              />
-            ))}
+            {chainDealGroups.map((group) =>
+              Array.isArray(group) ? (
+                <CompletedChainGroupCard
+                  key={group[0]?.deal.dealId}
+                  legs={group}
+                  metadataByDeal={metadataByDeal}
+                  onOpenChain={onOpenChain}
+                />
+              ) : (
+                <ChainDealCard
+                  key={group.dealId}
+                  deal={group}
+                  metadata={metadataByDeal.get(group.dealId)}
+                  onOpen={() => onOpenChainDeal(group.dealId)}
+                />
+              ),
+            )}
           </div>
         </div>
       ) : null}

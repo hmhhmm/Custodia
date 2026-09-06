@@ -31,10 +31,24 @@ function isVerificationInfo(detail: StatusStep["detail"]): detail is Verificatio
   return typeof detail === "object" && detail !== null && "attestationId" in detail;
 }
 
+/** The active state was a static half-filled character with a slow
+ * opacity fade — easy to miss, and didn't read as "something is really
+ * happening right now" the way a genuine spinning ring does. A real
+ * CSS-animated spinner (rotating border, not text/emoji) is unambiguous
+ * at a glance and matches the "in progress" language most people already
+ * read as a loading indicator elsewhere on the web. */
 function StepGlyph({ state }: { state: StatusStep["state"] }) {
-  if (state === "done") return <span className="text-emerald-500">✓</span>;
+  if (state === "done") return <span className="text-vellum">✓</span>;
   if (state === "failed") return <span className="text-red-500">✕</span>;
-  if (state === "active") return <span className="animate-pulse text-vellum">◐</span>;
+  if (state === "active") {
+    return (
+      <span
+        className="inline-block h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-manifest border-t-vellum"
+        role="status"
+        aria-label="In progress"
+      />
+    );
+  }
   return <span className="text-manifest">○</span>;
 }
 
