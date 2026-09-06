@@ -25,7 +25,7 @@ import { buildMarkDeliveredTx } from "../sui/ptb-deliver";
 import { buildPushCheckpointTx } from "../sui/ptb-checkpoint";
 import { encryptDealContent, decryptDealContent } from "../verification/seal";
 import { storeBlob, readBlob } from "../verification/walrus";
-import { mockNautilusAttest } from "../verification/nautilus.mock";
+import { mockNautilusAttest } from "../verification/nautilus";
 import { dAppKit as dAppKitSingleton } from "../sui/dapp-kit";
 import { CurrentAccountSigner, type DAppKit } from "@mysten/dapp-kit-core";
 import type { RegisteredAgent } from "../sui/ptb-register-agent";
